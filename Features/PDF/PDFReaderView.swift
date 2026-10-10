@@ -96,6 +96,11 @@ struct PDFReaderView: View {
                 .disabled(model.document == nil || model.item.pageIndex >= model.item.pageCount - 1)
         }
         ToolbarItemGroup {
+            if let scan = model.documentScan {
+                ProgressView(value: Double(scan.done), total: Double(max(scan.total, 1)))
+                    .progressViewStyle(.circular).controlSize(.small)
+                    .help("Recognized \(scan.done) of \(scan.total) pages")
+            }
             Button("Zoom Out", systemImage: "minus.magnifyingglass") { model.zoom(1 / 1.2) }
             Button("Zoom In", systemImage: "plus.magnifyingglass") { model.zoom(1.2) }
             Menu("PDF Display", systemImage: "rectangle.expand.vertical") {
@@ -129,6 +134,12 @@ struct PDFReaderView: View {
                 }
                 Button("Recognize This Page") { model.loadText(page: model.item.pageIndex, forceOCR: true) }
                     .disabled(model.document == nil || model.isRecognizing)
+                if let scan = model.documentScan {
+                    Button("Stop Recognizing All Pages (\(scan.done)/\(scan.total))") { model.stopRecognizingAllPages() }
+                } else {
+                    Button("Recognize All Pages") { model.recognizeAllPages() }
+                        .disabled(!model.canRecognizeAllPages)
+                }
                 Button("Cancel Recognition") { model.cancelRecognition() }.disabled(!model.isRecognizing)
                 Divider()
                 Text("Text recognition runs on this Mac. Only Japanese OCR is supported.")
