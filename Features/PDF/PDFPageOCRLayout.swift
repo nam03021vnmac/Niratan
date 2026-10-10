@@ -57,7 +57,7 @@ nonisolated enum PDFPageOCRLayout {
     /// thicker line of the same orientation (above horizontal text, to the
     /// right of vertical text) and overlapping it along the reading axis.
     /// Small footnotes, captions and headings elsewhere on the page stay.
-    static func removeRuby(_ lines: [PDFOCRLine], thicknessRatio: CGFloat = 0.65) -> [PDFOCRLine] {
+    static func removeRuby(_ lines: [PDFOCRLine], thicknessRatio: CGFloat = 0.75) -> [PDFOCRLine] {
         lines.enumerated().filter { index, line in
             !lines.enumerated().contains { otherIndex, base in
                 guard otherIndex != index, base.vertical == line.vertical,
@@ -136,6 +136,92 @@ nonisolated enum PDFPageOCRLayout {
             }
             if !block.spans.isEmpty { result.append(block) }
         }
-        return PDFTextGeometry.joinWrappedLines(result)
+        return readingOrder(PDFTextGeometry.joinWrappedLines(result, maxGap: 1.6))
+    }
+
+    /// Order paragraphs by column: horizontal text in left-to-right column
+    /// bands (top to bottom inside a band), then vertical text in
+    /// top-to-bottom bands (right to left inside a band). Bands are unions of
+    /// overlapping extents, so a full-width heading simply merges them.
+    static func readingOrder(_ blocks: [PDFTextBlock]) -> [PDFTextBlock] {
+        let items = blocks.map { (block: $0, bounds: $0.spans.reduce(CGRect.null) { $0.union($1.rect) }) }
+        func ordered(_ group: [(block: PDFTextBlock, bounds: CGRect)], vertical: Bool) -> [PDFTextBlock] {
+            // Band axis: x for horizontal text, y (top first) for vertical.
+            func band(_ rect: CGRect) -> (CGFloat, CGFloat) { vertical ? (-rect.maxY, -rect.minY) : (rect.minX, rect.maxX) }
+            var bands: [(lower: CGFloat, upper: CGFloat, members: [(block: PDFTextBlock, bounds: CGRect)])] = []
+            for item in group.sorted(by: { band($0.bounds).0 < band($1.bounds).0 }) {
+                let (lower, upper) = band(item.bounds)
+                if let last = bands.indices.last, lower < bands[last].upper {
+                    bands[last].upper = max(bands[last].upper, upper)
+                    bands[last].members.append(item)
+                } else {
+                    bands.append((lower, upper, [item]))
+                }
+            }
+            return bands.flatMap { band in
+                band.members.sorted { vertical ? $0.bounds.maxX > $1.bounds.maxX : $0.bounds.maxY > $1.bounds.maxY }.map(\.block)
+            }
+        }
+        return ordered(items.filter { !$0.block.vertical }, vertical: false) + ordered(items.filter(\.block.vertical), vertical: true)
+    }
+
+    /// Runs of a non-zero ink profile, merging runs separated by fewer than
+    /// `minimumGap` blank positions.
+    static func segments(profile: [Int], minimumGap: Int) -> [Range<Int>] {
+        var runs: [Range<Int>] = []
+        var start: Int?
+        for index in 0...profile.count {
+            let inked = index < profile.count && profile[index] > 0
+            if inked, start == nil { start = index }
+            if !inked, let begin = start {
+                if let last = runs.last, begin - last.upperBound < minimumGap {
+                    runs[runs.count - 1] = last.lowerBound..<index
+                } else {
+                    runs.append(begin..<index)
+                }
+                start = nil
+            }
+        }
+        return runs
+    }
+
+    /// Split a vertical column into em-box cells from its row ink runs
+    /// (`start..<end` in pixels, top to bottom). Full-size glyphs anchor the
+    /// grid, so pitch error never accumulates along a long column; strokes of
+    /// one glyph separated by blank rows (二, 宀) share a cell, and small kana
+    /// and punctuation keep their own cell.
+    static func verticalCells(runs: [Range<Int>], glyphWidth: CGFloat, length: Int) -> (pitch: CGFloat, cells: [Range<Int>]) {
+        guard !runs.isEmpty, glyphWidth > 0 else { return (glyphWidth, []) }
+        let large = runs.filter { CGFloat($0.count) >= glyphWidth * 0.6 }
+        let centers = large.map { CGFloat($0.lowerBound + $0.upperBound) / 2 }
+        let steps = zip(centers, centers.dropFirst()).map { $1 - $0 }.filter { $0 >= glyphWidth * 0.8 && $0 <= glyphWidth * 1.6 }.sorted()
+        let pitch = steps.isEmpty ? glyphWidth * 1.05 : steps[steps.count / 2]
+        var cells: [(start: CGFloat, range: Range<Int>)] = []
+        for run in runs {
+            let center = CGFloat(run.lowerBound + run.upperBound) / 2
+            let anchor = centers.min { Swift.abs($0 - center) < Swift.abs($1 - center) }
+            let start: CGFloat
+            if let anchor {
+                let origin = anchor - pitch / 2
+                start = origin + floor((center - origin) / pitch) * pitch
+            } else {
+                start = CGFloat(run.lowerBound) - (pitch - CGFloat(run.count)) / 2
+            }
+            if let last = cells.last, Swift.abs(last.start - start) < pitch * 0.3 {
+                cells[cells.count - 1].range = last.range.lowerBound..<max(last.range.upperBound, run.upperBound)
+            } else {
+                cells.append((start, run))
+            }
+        }
+        // Each cell spans its em box, clipped so neighbours never overlap.
+        var result: [Range<Int>] = []
+        for (index, cell) in cells.enumerated() {
+            var lower = max(0, min(cell.range.lowerBound, Int(cell.start.rounded())))
+            var upper = min(length, max(cell.range.upperBound, Int((cell.start + pitch).rounded())))
+            if let previous = result.last { lower = max(lower, previous.upperBound) }
+            if index + 1 < cells.count { upper = min(upper, max(cell.range.upperBound, cells[index + 1].range.lowerBound)) }
+            if upper > lower { result.append(lower..<upper) }
+        }
+        return (pitch, result)
     }
 }

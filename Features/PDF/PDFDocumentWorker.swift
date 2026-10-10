@@ -208,7 +208,12 @@ actor PDFDocumentWorker {
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw PDFSupportError.geometry }
         context.setFillColor(CGColor(gray: 1, alpha: 1))
         context.fill(CGRect(origin: .zero, size: pixels))
-        let transform = ref.getDrawingTransform(.cropBox, rect: CGRect(origin: .zero, size: pixels), rotate: 0, preserveAspectRatio: true)
+        // getDrawingTransform only ever scales down: aimed at the pixel rect it
+        // leaves the page at 72 dpi in the middle of the canvas. Use it at the
+        // page's own size for crop origin and rotation, then scale explicitly.
+        let transform = ref.getDrawingTransform(.cropBox, rect: CGRect(origin: .zero, size: CGSize(width: width, height: height)),
+                                                rotate: 0, preserveAspectRatio: true)
+            .concatenating(CGAffineTransform(scaleX: pixels.width / width, y: pixels.height / height))
         context.concatenate(transform)
         context.drawPDFPage(ref)
         guard let image = context.makeImage() else { throw PDFSupportError.geometry }

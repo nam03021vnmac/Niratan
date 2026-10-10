@@ -74,7 +74,10 @@ nonisolated enum PDFTextGeometry {
     /// Join geometrically adjacent soft-wrapped lines/columns, not whole page
     /// strings. Sentence endings, distinct columns and smaller ruby text stay
     /// separate. Search only a bounded set of active paragraph tails.
-    static func joinWrappedLines(_ blocks: [PDFTextBlock]) -> [PDFTextBlock] {
+    /// `maxGap` is the largest line/column gap, in glyph sizes, that still
+    /// soft-wraps. OCR boxes hug the ink, so their gaps are wider than
+    /// PDFKit's font-box gaps for the same leading.
+    static func joinWrappedLines(_ blocks: [PDFTextBlock], maxGap: CGFloat = 1) -> [PDFTextBlock] {
         struct Line {
             var block: PDFTextBlock
             var bounds: CGRect
@@ -97,12 +100,12 @@ nonisolated enum PDFTextGeometry {
             if previous.block.vertical {
                 let gap = previous.bounds.minX - next.bounds.maxX
                 return min(previous.glyph.width, next.glyph.width) / max(previous.glyph.width, next.glyph.width) > 0.72
-                    && gap >= -previous.glyph.width * 0.3 && gap <= previous.glyph.width
+                    && gap >= -previous.glyph.width * 0.3 && gap <= previous.glyph.width * maxGap
                     && Swift.abs(previous.bounds.maxY - next.bounds.maxY) <= previous.glyph.height * 2
             }
             let gap = previous.bounds.minY - next.bounds.maxY
             let overlap = max(0, min(previous.bounds.maxX, next.bounds.maxX) - max(previous.bounds.minX, next.bounds.minX))
-            return gap >= -previous.glyph.height * 0.3 && gap <= previous.glyph.height
+            return gap >= -previous.glyph.height * 0.3 && gap <= previous.glyph.height * maxGap
                 && Swift.abs(previous.bounds.minX - next.bounds.minX) <= previous.glyph.width * 2
                 && overlap >= min(previous.bounds.width, next.bounds.width) * 0.8
         }

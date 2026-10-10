@@ -75,6 +75,38 @@ private enum PDFPageOCRLayoutTests {
         let outside = PDFOCRRecognizedLine(line: .init(rect: CGRect(x: 900, y: 900, width: 40, height: 40), vertical: false),
                                            tokens: [PDFOCRToken(text: "外", center: 0.5)])
         precondition(PDFPageOCRLayout.blocks([outside], pixels: pixels, transform: transform, crop: crop).isEmpty)
+
+        // Ink segments: small pauses stay inside a run, wide ones split it.
+        let profile = [0, 3, 3, 0, 2, 2, 0, 0, 0, 0, 0, 4, 4, 0]
+        precondition(PDFPageOCRLayout.segments(profile: profile, minimumGap: 1) == [1..<3, 4..<6, 11..<13])
+        precondition(PDFPageOCRLayout.segments(profile: profile, minimumGap: 3) == [1..<6, 11..<13], "a gutter splits, a glyph gap does not")
+        precondition(PDFPageOCRLayout.segments(profile: [], minimumGap: 2).isEmpty)
+
+        // Vertical cells on a 40 px pitch: 二's two strokes share a cell, small
+        // っ and 。 keep their own, and cells never overlap.
+        let runs = [2..<38, 42..<78, 84..<92, 108..<116, 124..<136, 164..<172]
+        let (pitch, cells) = PDFPageOCRLayout.verticalCells(runs: runs, glyphWidth: 36, length: 200)
+        precondition(abs(pitch - 40) < 0.5, "pitch from neighbouring full glyphs: \(pitch)")
+        precondition(cells.count == 5, "\(cells)")
+        precondition(cells[2].contains(88) && cells[2].contains(112), "both strokes of one glyph share a cell")
+        precondition(cells[3].contains(130) && cells[4].contains(168), "small kana and punctuation keep their own cells")
+        precondition(zip(cells, cells.dropFirst()).allSatisfy { $0.upperBound <= $1.lowerBound })
+        precondition(cells.allSatisfy { $0.lowerBound >= 0 && $0.upperBound <= 200 })
+        precondition(PDFPageOCRLayout.verticalCells(runs: [], glyphWidth: 10, length: 50).cells.isEmpty)
+
+        // Reading order: left column before right column, top to bottom inside each.
+        func block(_ text: String, x: CGFloat, y: CGFloat, vertical: Bool = false) -> PDFTextBlock {
+            PDFTextBlock(text: text, vertical: vertical, spans: [.init(location: 0, length: 1, rect: CGRect(x: x, y: y, width: 100, height: 10))])
+        }
+        let order = PDFPageOCRLayout.readingOrder([block("R1", x: 300, y: 700), block("L2", x: 50, y: 500),
+                                                   block("L1", x: 50, y: 700), block("R2", x: 300, y: 500)]).map(\.text)
+        precondition(order == ["L1", "L2", "R1", "R2"], "\(order)")
+
+        // OCR soft-wrap: a one-glyph line gap joins only with the OCR gap ratio.
+        let upper = PDFTextBlock(text: "日本", vertical: false, spans: [.init(location: 0, length: 2, rect: CGRect(x: 10, y: 100, width: 20, height: 10))])
+        let lower = PDFTextBlock(text: "語", vertical: false, spans: [.init(location: 0, length: 1, rect: CGRect(x: 10, y: 78, width: 20, height: 10))])
+        precondition(PDFTextGeometry.joinWrappedLines([upper, lower]).count == 2, "native text keeps the strict gap")
+        precondition(PDFTextGeometry.joinWrappedLines([upper, lower], maxGap: 1.6).count == 1)
         print("PDF page OCR layout tests passed")
     }
 }
