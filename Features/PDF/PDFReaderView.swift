@@ -9,6 +9,8 @@ struct PDFReaderView: View {
     @State private var password = ""
     @State private var pageNumber = ""
     @State private var registration: UUID?
+    @State private var models = MangaOCRModelManager.shared
+    @AppStorage(PDFOCREngineChoice.defaultsKey) private var engineRaw = PDFOCREngineChoice.automatic.rawValue
 
     var body: some View {
         GeometryReader { proxy in
@@ -25,6 +27,8 @@ struct PDFReaderView: View {
             }
         }
         .toolbar { readerToolbar }
+        .task { await models.refresh() }
+        .onChange(of: models.revision) { model.engineChanged() }
         .onAppear {
             pageNumber = String(model.item.pageIndex + 1)
             registration = shortcutManager.register(scope: .pdf, handlers: [
@@ -107,6 +111,22 @@ struct PDFReaderView: View {
                         else { model.cancelRecognition() }
                         model.save()
                     }
+                Picker("OCR Engine", selection: $engineRaw) {
+                    Text("Automatic").tag(PDFOCREngineChoice.automatic.rawValue)
+                    Text("PP-OCR (on this Mac)").tag(PDFOCREngineChoice.paddle.rawValue)
+                    Text("Apple Vision").tag(PDFOCREngineChoice.vision.rawValue)
+                }
+                .onChange(of: engineRaw) { model.engineChanged() }
+                if models.statuses[.pdfOCR]?.isReady != true {
+                    if models.isDownloading(.pdfOCR) {
+                        Button("Cancel PP-OCR Download") { models.cancel(.pdfOCR) }
+                    } else {
+                        Button("Download PP-OCR Models (\(ByteCountFormatter.string(fromByteCount: MangaOCRModelSet.pdfOCR.totalBytes, countStyle: .file)))") {
+                            models.download(.pdfOCR)
+                        }
+                    }
+                    if let error = models.errors[.pdfOCR] { Text(error) }
+                }
                 Button("Recognize This Page") { model.loadText(page: model.item.pageIndex, forceOCR: true) }
                     .disabled(model.document == nil || model.isRecognizing)
                 Button("Cancel Recognition") { model.cancelRecognition() }.disabled(!model.isRecognizing)

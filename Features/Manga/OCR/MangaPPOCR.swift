@@ -28,9 +28,12 @@ nonisolated final class MangaPPLineDetector: @unchecked Sendable {
         session = try MangaOCRSession(modelURL: modelURL)
     }
 
-    static func inputSize(width: Int, height: Int) -> (width: Int, height: Int) {
+    /// `maxSide` caps the longer side (full document pages); manga blocks
+    /// leave it nil and keep the original behavior.
+    static func inputSize(width: Int, height: Int, maxSide: Int? = nil) -> (width: Int, height: Int) {
         let minSide = min(width, height)
-        let ratio = minSide < limitSideLength ? Double(limitSideLength) / Double(minSide) : 1.0
+        var ratio = minSide < limitSideLength ? Double(limitSideLength) / Double(minSide) : 1.0
+        if let maxSide, max(width, height) > maxSide { ratio = Double(maxSide) / Double(max(width, height)) }
         func round32(_ side: Int) -> Int {
             max(32, Int((Double(Int(Double(side) * ratio)) / 32).rounded()) * 32)
         }
@@ -38,8 +41,8 @@ nonisolated final class MangaPPLineDetector: @unchecked Sendable {
     }
 
     /// Lines in `crop` pixel space.
-    func detect(_ crop: MangaOCRBitmap) throws -> [MangaPPTextLine] {
-        let size = Self.inputSize(width: crop.width, height: crop.height)
+    func detect(_ crop: MangaOCRBitmap, maxSide: Int? = nil) throws -> [MangaPPTextLine] {
+        let size = Self.inputSize(width: crop.width, height: crop.height, maxSide: maxSide)
         let resized = crop.resizedLinear(width: size.width, height: size.height)
         let plane = size.width * size.height
         var chw = [Float](repeating: 0, count: 3 * plane)
@@ -219,7 +222,27 @@ nonisolated final class MangaPPLineRecognizer: @unchecked Sendable {
     }
 
     func recognizeLine(_ line: MangaOCRBitmap) throws -> String {
-        guard line.width > 0, line.height > 0 else { return "" }
+        guard let output = try infer(line) else { return "" }
+        return output.logits.data.withUnsafeBytes { raw in
+            Self.ctcGreedyDecode(raw.bindMemory(to: Float.self), frames: output.frames, vocabSize: output.vocabSize, vocabulary: vocabulary)
+        }
+    }
+
+    /// Greedy CTC tokens with the centre of each token's frame run, as a
+    /// 0…1 fraction of the line's width. Used to place per-character boxes.
+    func recognizeLineTokens(_ line: MangaOCRBitmap) throws -> [PDFOCRToken] {
+        guard let output = try infer(line) else { return [] }
+        return output.logits.data.withUnsafeBytes { raw in
+            Self.ctcGreedyTokens(
+                raw.bindMemory(to: Float.self), frames: output.frames, vocabSize: output.vocabSize,
+                vocabulary: vocabulary, frameStride: Double(output.inputWidth) / Double(output.frames),
+                contentWidth: Double(output.scaledWidth)
+            )
+        }
+    }
+
+    private func infer(_ line: MangaOCRBitmap) throws -> (logits: MangaOCRTensor, frames: Int, vocabSize: Int, inputWidth: Int, scaledWidth: Int)? {
+        guard line.width > 0, line.height > 0 else { return nil }
         let scaledWidth = max(1, Int(ceil(Double(Self.height) * Double(line.width) / Double(line.height))))
         let inputWidth = max(Self.minimumWidth, scaledWidth)
         let resized = line.resizedLinear(width: scaledWidth, height: Self.height)
@@ -247,9 +270,43 @@ nonisolated final class MangaPPLineRecognizer: @unchecked Sendable {
         guard vocabSize == vocabulary.count else {
             throw MangaOCREngineError.modelInvalid("PP-OCR vocabulary \(vocabSize) vs \(vocabulary.count)")
         }
-        return logits.data.withUnsafeBytes { raw in
-            Self.ctcGreedyDecode(raw.bindMemory(to: Float.self), frames: frames, vocabSize: vocabSize, vocabulary: vocabulary)
+        return (logits, frames, vocabSize, inputWidth, scaledWidth)
+    }
+
+    /// Same decode as `ctcGreedyDecode`, but each emitted token carries the
+    /// middle of its run of identical frames mapped back onto the line.
+    static func ctcGreedyTokens(
+        _ logits: UnsafeBufferPointer<Float>,
+        frames: Int,
+        vocabSize: Int,
+        vocabulary: [String],
+        frameStride: Double,
+        contentWidth: Double
+    ) -> [PDFOCRToken] {
+        var tokens: [PDFOCRToken] = []
+        var runToken = 0
+        var runStart = 0
+        func flush(endExclusive: Int) {
+            guard runToken != 0, contentWidth > 0 else { return }
+            let center = (Double(runStart + endExclusive) / 2) * frameStride
+            tokens.append(PDFOCRToken(text: vocabulary[runToken], center: min(1, max(0, center / contentWidth))))
         }
+        for frame in 0..<frames {
+            let base = frame * vocabSize
+            var best = 0
+            var bestScore = logits[base]
+            for token in 1..<vocabSize where logits[base + token] > bestScore {
+                bestScore = logits[base + token]
+                best = token
+            }
+            if best != runToken {
+                flush(endExclusive: frame)
+                runToken = best
+                runStart = frame
+            }
+        }
+        flush(endExclusive: frames)
+        return tokens
     }
 
     static func ctcGreedyDecode(

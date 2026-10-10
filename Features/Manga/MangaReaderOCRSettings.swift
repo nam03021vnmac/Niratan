@@ -62,6 +62,7 @@ final class MangaOCRModelManager {
         Task {
             await MangaLocalOCREngine.shared.unload()
             await MangaPanelDetector.shared.unload()
+            PDFPaddleOCREngine.unload()
             do {
                 try await store.delete(set)
             } catch {

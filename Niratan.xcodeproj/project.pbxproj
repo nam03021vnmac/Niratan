@@ -104,6 +104,8 @@
 				PDF/PDFReaderViewModel.swift,
 				PDF/PDFShortcutActions.swift,
 				PDF/PDFTextCache.swift,
+				PDF/PDFPageOCRLayout.swift,
+				PDF/PDFPaddleOCREngine.swift,
 				Bookshelf/BookshelfDropSupport.swift,
 				Bookshelf/BookshelfViewModel.swift,
 				Bookshelf/BookView.swift,

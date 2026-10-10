@@ -199,8 +199,20 @@ nonisolated enum PDFTextGeometry {
     }
 }
 
+/// Which engine reads scanned or image-only pages. Automatic uses PP-OCR once
+/// its models are downloaded and Apple Vision until then.
+nonisolated enum PDFOCREngineChoice: String, CaseIterable, Sendable {
+    case automatic, paddle, vision
+
+    static let defaultsKey = "pdfOCREngine"
+
+    static func stored(_ defaults: UserDefaults = .standard) -> PDFOCREngineChoice {
+        defaults.string(forKey: defaultsKey).flatMap(PDFOCREngineChoice.init(rawValue:)) ?? .automatic
+    }
+}
+
 nonisolated enum PDFSupportError: LocalizedError {
-    case unreadable, locked, permission, catalog, changed, geometry
+    case unreadable, locked, permission, catalog, changed, geometry, modelsMissing
     var errorDescription: String? {
         switch self {
         case .unreadable: String(localized: "Unable to read this PDF. Locate the file or import a valid PDF.")
@@ -209,6 +221,7 @@ nonisolated enum PDFSupportError: LocalizedError {
         case .catalog: String(localized: "The PDF library could not be read. Its existing data has been preserved.")
         case .changed: String(localized: "The PDF changed during reading. Close it and open it again.")
         case .geometry: String(localized: "This PDF page is too large or has invalid dimensions.")
+        case .modelsMissing: String(localized: "Download the PP-OCR models from the Japanese OCR menu, or choose another engine.")
         }
     }
 }

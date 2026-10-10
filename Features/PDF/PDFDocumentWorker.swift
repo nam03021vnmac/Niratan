@@ -13,10 +13,14 @@ actor PDFDocumentWorker {
     private var revision: String?
     private var stamp: String?
     private let cacheDirectory: URL?
+    private let lineOCR: @Sendable () async throws -> (any PDFLineRecognizing)?
 
-    init(url: URL, cacheDirectory: URL? = nil) {
+    /// `lineOCR` resolves the line-based engine, or nil while its models are
+    /// missing; without one only Apple Vision is available.
+    init(url: URL, cacheDirectory: URL? = nil, lineOCR: @escaping @Sendable () async throws -> (any PDFLineRecognizing)? = { nil }) {
         self.url = url
         self.cacheDirectory = cacheDirectory
+        self.lineOCR = lineOCR
         scoped = url.startAccessingSecurityScopedResource()
     }
 
@@ -86,17 +90,43 @@ actor PDFDocumentWorker {
         return PDFTextGeometry.joinWrappedLines(PDFTextGeometry.joinVerticalFragments(blocks))
     }
 
-    func recognize(page index: Int, useCache: Bool = true) async throws -> [PDFTextBlock] {
+    func recognize(page index: Int, useCache: Bool = true, choice: PDFOCREngineChoice = .stored()) async throws -> [PDFTextBlock] {
         try Task.checkCancellation()
         try validateSource()
         guard let document, document.allowsCopying else { throw PDFSupportError.permission }
         guard let page = document.page(at: index) else { throw PDFSupportError.unreadable }
+        let paddle: (any PDFLineRecognizing)?
+        switch choice {
+        case .vision:
+            paddle = nil
+        case .automatic:
+            paddle = try await lineOCR()
+        case .paddle:
+            guard let engine = try await lineOCR() else { throw PDFSupportError.modelsMissing }
+            paddle = engine
+        }
         let digest = try contentRevision()
         let crop = page.bounds(for: .cropBox)
-        let identity = "\(digest)|\(index)|\(crop)|\(page.rotation)|ja-JP|vision-documents-ranges-v1|240dpi-4096-12mp|\(ProcessInfo.processInfo.operatingSystemVersionString)"
+        let engineIdentity = paddle?.identity ?? "vision-documents-ranges-v1"
+        let identity = "\(digest)|\(index)|\(crop)|\(page.rotation)|ja-JP|\(engineIdentity)|240dpi-4096-12mp|\(ProcessInfo.processInfo.operatingSystemVersionString)"
         let cache = PDFTextCache(directory: cacheDirectory)
         if useCache, !document.isEncrypted, let result = cache.load(identity: identity) { return result }
         let raster = try rasterize(page: page)
+        let blocks: [PDFTextBlock]
+        if let paddle {
+            let lines = try await paddle.recognize(image: raster.image)
+            blocks = PDFPageOCRLayout.blocks(lines, pixels: raster.size, transform: raster.transform, crop: crop)
+        } else {
+            blocks = try await recognizeWithVision(raster: raster, crop: crop)
+        }
+        try Task.checkCancellation()
+        try validateSource()
+        // Do not turn password-protected documents into plaintext disk caches.
+        if !document.isEncrypted { try cache.save(blocks, identity: identity) }
+        return blocks
+    }
+
+    private func recognizeWithVision(raster: (image: CGImage, size: CGSize, transform: CGAffineTransform), crop: CGRect) async throws -> [PDFTextBlock] {
         var request = RecognizeDocumentsRequest()
         request.textRecognitionOptions.recognitionLanguages = [Locale.Language(identifier: "ja-JP")]
         request.textRecognitionOptions.automaticallyDetectLanguage = false
@@ -130,9 +160,6 @@ actor PDFDocumentWorker {
                 if !block.spans.isEmpty { blocks.append(block) }
             }
         }
-        try Task.checkCancellation()
-        // Do not turn password-protected documents into plaintext disk caches.
-        if !document.isEncrypted { try cache.save(blocks, identity: identity) }
         return blocks
     }
 

@@ -1,4 +1,4 @@
-// test-sources: Models/PDF.swift Features/PDF/PDFTextCache.swift Features/PDF/PDFDocumentWorker.swift Features/PDF/PDFLibraryStore.swift
+// test-sources: Models/PDF.swift Features/PDF/PDFTextCache.swift Features/PDF/PDFDocumentWorker.swift Features/PDF/PDFPageOCRLayout.swift Features/PDF/PDFLibraryStore.swift
 import AppKit
 import CoreText
 import PDFKit

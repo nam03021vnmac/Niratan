@@ -44,7 +44,7 @@ final class PDFReaderViewModel {
                     let source = try PDFLibraryStore.shared.resolve(item)
                     url = source
                     accessing = source.startAccessingSecurityScopedResource()
-                    worker = PDFDocumentWorker(url: source)
+                    worker = PDFDocumentWorker(url: source, lineOCR: { try await PDFPaddleOCREngine.current() })
                 }
                 guard let worker, let url else { throw PDFSupportError.unreadable }
                 let metadata = try await worker.prepare(password: password)
@@ -143,6 +143,15 @@ final class PDFReaderViewModel {
                 isRecognizing = false; status = error.localizedDescription
             }
         }
+    }
+
+    /// The OCR engine or its models changed: drop recognized text so visible
+    /// pages are read again with the current engine.
+    func engineChanged() {
+        guard !closed, document != nil else { return }
+        for key in pages.keys { pages[key]?.recognized = [] }
+        completedOCR.removeAll()
+        loadText(page: item.pageIndex)
     }
 
     func cancelRecognition() {
