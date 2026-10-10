@@ -19,11 +19,11 @@ nonisolated struct SyncDailyTotal: Codable, Equatable, Sendable {
     static let zero = SyncDailyTotal(charactersRead: 0, readingTime: 0)
 
     var hasActivity: Bool {
-        charactersRead != 0 || abs(readingTime) > 0.0005
+        charactersRead != 0 || Swift.abs(readingTime) > 0.0005
     }
 
     func isClose(to other: SyncDailyTotal) -> Bool {
-        charactersRead == other.charactersRead && abs(readingTime - other.readingTime) < 0.001
+        charactersRead == other.charactersRead && Swift.abs(readingTime - other.readingTime) < 0.001
     }
 
     static func + (lhs: Self, rhs: Self) -> Self {
@@ -103,7 +103,7 @@ nonisolated struct SyncBookmarkProjection: Codable, Equatable, Sendable {
 
     func samePosition(as bookmark: Bookmark) -> Bool {
         chapterIndex == bookmark.chapterIndex && characterCount == bookmark.characterCount
-            && abs(progress - bookmark.progress) < 0.000000001
+            && Swift.abs(progress - bookmark.progress) < 0.000000001
     }
 
     func matches(_ bookmark: Bookmark, modified: Int64) -> Bool {
@@ -115,7 +115,7 @@ nonisolated struct SyncBookmarkProjection: Codable, Equatable, Sendable {
         // Reader's floating multiplication may round an imported integer down by one.
         // This tolerance applies only to the same chapter/progress and original stamp.
         return self.modified == modified && chapterIndex == bookmark.chapterIndex
-            && abs(progress - bookmark.progress) < 0.000000001
+            && Swift.abs(progress - bookmark.progress) < 0.000000001
             && characterCount >= 0 && bookmark.characterCount >= 0
             && (characterCount > bookmark.characterCount
                 ? characterCount - bookmark.characterCount : bookmark.characterCount - characterCount) <= 1

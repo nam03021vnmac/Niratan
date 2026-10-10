@@ -8,6 +8,7 @@ final class HoshiNativeMacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         ReaderWindowPresenter.shared.persistFrameForApplicationTermination()
+        PDFWindowPresenter.shared.saveForTermination()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

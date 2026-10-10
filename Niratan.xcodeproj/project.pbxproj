@@ -75,6 +75,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Anki.swift,
+				PDF.swift,
 				Book.swift,
 				Dictionary.swift,
 				Highlight.swift,
@@ -93,6 +94,16 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Bookshelf/BookCell.swift,
+				PDF/PDFDocumentWorker.swift,
+				PDF/PDFPointerSelectionPolicy.swift,
+				PDF/PDFLookupSelectionResolver.swift,
+				PDF/PDFPageTextSchedulingPolicy.swift,
+				PDF/PDFLibraryStore.swift,
+				PDF/PDFLibraryView.swift,
+				PDF/PDFReaderView.swift,
+				PDF/PDFReaderViewModel.swift,
+				PDF/PDFShortcutActions.swift,
+				PDF/PDFTextCache.swift,
 				Bookshelf/BookshelfDropSupport.swift,
 				Bookshelf/BookshelfViewModel.swift,
 				Bookshelf/BookView.swift,

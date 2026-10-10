@@ -129,9 +129,9 @@ enum VideoPlaybackSpeed {
     static func label(_ speed: Double, includesSuffix: Bool = true) -> String {
         let value = normalized(speed)
         let formatted: String
-        if abs(value - minimum) < 0.001 {
+        if Swift.abs(value - minimum) < 0.001 {
             formatted = "0.25"
-        } else if abs(value - value.rounded()) < 0.001 {
+        } else if Swift.abs(value - value.rounded()) < 0.001 {
             formatted = String(format: "%.0f", value)
         } else {
             formatted = String(format: "%.1f", value)

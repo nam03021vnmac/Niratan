@@ -529,7 +529,7 @@ nonisolated enum MangaPageProcessor {
         for y in 0..<height {
             let row = y * width * 4
             for x in 0..<width
-            where abs(mean(row + x * 4) - background) > borderDifferenceThreshold {
+            where Swift.abs(mean(row + x * 4) - background) > borderDifferenceThreshold {
                 minX = min(minX, x)
                 maxX = max(maxX, x)
                 minY = min(minY, y)

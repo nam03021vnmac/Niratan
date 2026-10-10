@@ -288,7 +288,7 @@ struct VideoPlaybackCommands: Commands {
 
     private func isSpeedSelected(_ speed: Double) -> Bool {
         guard let currentSpeed = context?.snapshot.speed else { return false }
-        return abs(currentSpeed - speed) < 0.001
+        return Swift.abs(currentSpeed - speed) < 0.001
     }
 
     @ViewBuilder

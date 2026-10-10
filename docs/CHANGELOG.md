@@ -2,6 +2,18 @@
 
 This changelog records user-visible changes only. Implementation details, investigation logs, and temporary experiments belong in commits, issues, or focused design docs.
 
+## Unreleased
+
+### 中文
+
+- 新增本地 PDF 书库与原生阅读窗口，可导入、拖入或从 Finder 打开 PDF，翻页、缩放并恢复阅读位置。点击文字使用现有词典弹窗；无可提取文字的页面在本机识别日语，扫描正文带有可选中页眉时可手动识别当前页。原始 PDF 不会被修改或删除。
+- 修复初始化词典查词时可能发生的启动崩溃。
+
+### English
+
+- Add a local PDF library and native reader with import, drop/Finder opening, page navigation, zoom and saved reading position. Click text to use the shared dictionary popup; pages without extractable text use on-device Japanese OCR, with manual page recognition for scans containing selectable headers. Source PDFs are never modified or deleted.
+- Fix a startup crash while initializing dictionary lookup.
+
 ## 2.0.2
 
 ### 中文

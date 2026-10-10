@@ -81,6 +81,6 @@ enum ShortcutConflictChecker {
         }
 
         let underlying = firstIsPopup ? second : first
-        return !underlying.isDisjoint(with: [.reader, .dictionary, .video, .manga])
+        return !underlying.isDisjoint(with: [.reader, .dictionary, .video, .manga, .pdf])
     }
 }

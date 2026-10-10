@@ -152,7 +152,7 @@ extension VideoPlayerScreen {
     }
 
     static func delayOSDValue(_ delay: TimeInterval) -> String {
-        guard abs(delay) >= 0.005 else { return "0.00s" }
+        guard Swift.abs(delay) >= 0.005 else { return "0.00s" }
         return String(format: "%+.2fs", delay)
     }
 }

@@ -13,6 +13,8 @@ struct NativeMacRootView: View {
     @State private var pendingImportURL: URL?
     @State private var pendingRemoteImportURL: URL?
     @State private var dictionaryRequest: NativeDictionaryOpenRequest?
+    @State private var pdfImportError: String?
+    @State private var pdfOpenGeneration = UUID()
 
     var body: some View {
         rootContent
@@ -57,6 +59,9 @@ struct NativeMacRootView: View {
             }
         }
         .onOpenURL(perform: handleOpenURL)
+        .alert("Error", isPresented: Binding(get: { pdfImportError != nil }, set: { if !$0 { pdfImportError = nil } })) {
+            Button("OK", role: .cancel) { pdfImportError = nil }
+        } message: { Text(pdfImportError ?? "") }
         .nativeUpdatePresentation()
     }
 
@@ -88,6 +93,20 @@ struct NativeMacRootView: View {
         }
 
         switch route {
+        case .localPDF(let url):
+            selection = .pdf
+            pdfOpenGeneration = UUID()
+            let generation = pdfOpenGeneration
+            Task {
+                do {
+                    let item = try await PDFLibraryStore.shared.importFile(url)
+                    guard generation == pdfOpenGeneration else { return }
+                    PDFWindowPresenter.shared.open(item, userConfig: userConfig)
+                } catch {
+                    guard generation == pdfOpenGeneration else { return }
+                    pdfImportError = error.localizedDescription
+                }
+            }
         case .localFile(let url):
             if VideoMediaTypes.isMediaFile(url) {
                 openVideoWindow(with: url)

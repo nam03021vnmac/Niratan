@@ -413,7 +413,7 @@ struct VideoPlayerScreen: View {
                 )
                 updateSubtitleGapPlayback()
                 refreshAmbientBackdrop(
-                    reason: abs(time - oldTime) > 1.5 ? .seek : .playback
+                    reason: Swift.abs(time - oldTime) > 1.5 ? .seek : .playback
                 )
             }
             .onChange(of: model.snapshot.subtitleDelay) { _, delay in
@@ -1720,8 +1720,8 @@ private enum VideoVolumeScrollDelta {
         hasPreciseScrollingDeltas: Bool
     ) -> Double? {
         guard deltaY.isFinite,
-              abs(deltaY) >= 0.01,
-              abs(deltaY) >= abs(deltaX) else {
+              Swift.abs(deltaY) >= 0.01,
+              Swift.abs(deltaY) >= Swift.abs(deltaX) else {
             return nil
         }
 
@@ -1730,7 +1730,7 @@ private enum VideoVolumeScrollDelta {
         }
 
         let preciseDelta = deltaY * Self.preciseScale
-        guard abs(preciseDelta) >= Self.minimumPreciseStep else { return nil }
+        guard Swift.abs(preciseDelta) >= Self.minimumPreciseStep else { return nil }
         return min(max(preciseDelta, -Self.maximumPreciseStep), Self.maximumPreciseStep)
     }
 }

@@ -21,7 +21,7 @@ nonisolated enum NativeReaderWheelNavigationResolver {
         guard !hasPreciseScrollingDeltas,
               !hasMomentum,
               deltaY != 0,
-              abs(deltaY) >= abs(deltaX) else {
+              Swift.abs(deltaY) >= Swift.abs(deltaX) else {
             return nil
         }
         return deltaY < 0 ? .forward : .backward
@@ -55,7 +55,7 @@ nonisolated struct NativeReaderWheelNavigationAccumulator {
             accumulatedDeltaY = 0
         }
         accumulatedDeltaY += deltaY
-        guard abs(accumulatedDeltaY) >= threshold else {
+        guard Swift.abs(accumulatedDeltaY) >= threshold else {
             return nil
         }
         accumulatedDeltaY = 0
@@ -101,7 +101,7 @@ nonisolated struct NativeReaderTrackpadNavigationAccumulator {
         guard phase == .began || phase == .changed,
               !didNavigateInCurrentGesture,
               deltaY != 0,
-              abs(deltaY) >= abs(deltaX) else {
+              Swift.abs(deltaY) >= Swift.abs(deltaX) else {
             return nil
         }
 
@@ -110,7 +110,7 @@ nonisolated struct NativeReaderTrackpadNavigationAccumulator {
             accumulatedDeltaY = 0
         }
         accumulatedDeltaY += deltaY
-        guard abs(accumulatedDeltaY) >= threshold else {
+        guard Swift.abs(accumulatedDeltaY) >= threshold else {
             return nil
         }
         accumulatedDeltaY = 0

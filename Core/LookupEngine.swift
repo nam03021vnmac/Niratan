@@ -52,11 +52,10 @@ class LookupEngine {
                 query.add_kanji_dict(std.string(path.path(percentEncoded: false)))
             }
 
-            let processor = configuration.languageID.withCString {
-                language.get(std.string_view($0))
-            }
             dictQuery = consume query
-            lookup = Lookup(&dictQuery, processor.pointee)
+            lookup = configuration.languageID.withCString {
+                hoshiMakeLookup(&dictQuery, $0)
+            }
         }
     }
 

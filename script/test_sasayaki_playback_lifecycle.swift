@@ -454,7 +454,7 @@ enum SasayakiPlaybackLifecycleTest {
         )
         assertContains(
             tickSection,
-            "guard abs(seconds - pendingSeekPosition) <= seekLandingTolerance else { return }",
+            "guard Swift.abs(seconds - pendingSeekPosition) <= seekLandingTolerance else { return }",
             "old AVPlayer time samples should not overwrite a just-persisted cue jump"
         )
         assertContains(

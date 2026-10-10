@@ -38,6 +38,7 @@ extension ShortcutRegistry {
             + SasayakiShortcutActions.all
         actions += VideoShortcutActions.all
         actions += MangaShortcutActions.all
+        actions += PDFShortcutActions.all
         return ShortcutRegistry(actions: actions)
     }
 }

@@ -55,7 +55,7 @@ nonisolated final class SubtitleColorLayoutManager: NSLayoutManager, NSLayoutMan
             result[.underlineStyle] = 0
             result[.strikethroughStyle] = 0
             result[.foregroundColor] = NSColor.clear
-            result[.strokeWidth] = abs(width)
+            result[.strokeWidth] = Swift.abs(width)
             if width == 0 { result[.shadow] = NSShadow() }
         } else {
             result[.strokeWidth] = 0

@@ -1,4 +1,4 @@
-// test-sources: Features/Popup/PopupShortcutActions.swift Features/Reader/ReaderShortcutActions.swift Core/Shortcuts/ShortcutRegistry.swift Features/Video/VideoShortcutActions.swift Core/Shortcuts/ShortcutAction.swift Core/Shortcuts/KeyboardShortcutBinding.swift Features/Settings/ApplicationShortcutRegistry.swift Features/Dictionary/DictionaryShortcutActions.swift Features/Sasayaki/SasayakiShortcutActions.swift Features/Manga/MangaShortcutActions.swift
+// test-sources: Features/Popup/PopupShortcutActions.swift Features/Reader/ReaderShortcutActions.swift Core/Shortcuts/ShortcutRegistry.swift Features/Video/VideoShortcutActions.swift Core/Shortcuts/ShortcutAction.swift Core/Shortcuts/KeyboardShortcutBinding.swift Features/Settings/ApplicationShortcutRegistry.swift Features/Dictionary/DictionaryShortcutActions.swift Features/Sasayaki/SasayakiShortcutActions.swift Features/Manga/MangaShortcutActions.swift Features/PDF/PDFShortcutActions.swift
 import Foundation
 
 private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -13,6 +13,10 @@ private enum ShortcutRegistryTests {
     static func main() {
         let registry = ShortcutRegistry.application
         let ids = registry.actions.map(\.id)
+
+        expect(registry.action(id: PDFShortcutActions.next.id)?.scopes == [.pdf], "PDF navigation is window-scoped")
+        expect(PDFShortcutActions.next.defaultBinding.key == "rightArrow", "PDF uses native arrow bindings")
+        expect(PDFShortcutActions.zoomIn.defaultBinding.key == "=", "PDF zoom-in uses the unshifted Command-equals key")
 
         expect(Set(ids).count == ids.count, "action identifiers must be unique")
         expect(

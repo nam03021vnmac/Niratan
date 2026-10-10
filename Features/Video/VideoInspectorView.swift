@@ -1290,11 +1290,11 @@ struct VideoInspectorView: View {
 
     private var selectedPresetSpeed: Double {
         let normalizedSpeed = VideoPlaybackSpeed.normalized(state.speed)
-        return speedChoices.first { abs($0 - normalizedSpeed) < 0.001 } ?? normalizedSpeed
+        return speedChoices.first { Swift.abs($0 - normalizedSpeed) < 0.001 } ?? normalizedSpeed
     }
 
     private func isSpeedSelected(_ speed: Double) -> Bool {
-        abs(selectedPresetSpeed - VideoPlaybackSpeed.normalized(speed)) < 0.001
+        Swift.abs(selectedPresetSpeed - VideoPlaybackSpeed.normalized(speed)) < 0.001
     }
 
     private var sliderSpeed: Double {

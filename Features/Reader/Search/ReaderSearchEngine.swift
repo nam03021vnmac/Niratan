@@ -35,7 +35,13 @@ nonisolated struct ReaderSearchDocument: Sendable {
 
 nonisolated final class ReaderSearchEngine {
     private let document: ReaderSearchDocument
-    private lazy var index = ReaderSearchIndex(document: document)
+    private var cachedIndex: ReaderSearchIndex?
+    private var index: ReaderSearchIndex {
+        if let cachedIndex { return cachedIndex }
+        let value = ReaderSearchIndex(document: document)
+        cachedIndex = value
+        return value
+    }
 
     init(document: ReaderSearchDocument) {
         self.document = document

@@ -301,7 +301,7 @@ nonisolated enum MangaWheelNavigationResolver {
     ) -> MangaWheelNavigation? {
         guard !hasPreciseScrollingDeltas,
               deltaY != 0,
-              abs(deltaY) >= abs(deltaX) else {
+              Swift.abs(deltaY) >= Swift.abs(deltaX) else {
             return nil
         }
         // AppKit's vertical scrolling delta is positive when content moves up,
@@ -335,7 +335,7 @@ nonisolated struct MangaWheelNavigationAccumulator {
             accumulatedDeltaY = 0
         }
         accumulatedDeltaY += deltaY
-        guard abs(accumulatedDeltaY) >= threshold else {
+        guard Swift.abs(accumulatedDeltaY) >= threshold else {
             return nil
         }
         accumulatedDeltaY = 0
@@ -357,7 +357,7 @@ nonisolated enum MangaWheelZoomResolver {
         maximumScale: Double = Double(MangaReaderPreferences.maximumZoomPercentage) / 100,
         sensitivityMultiplier: Double = 1
     ) -> Double? {
-        let delta = abs(deltaY) >= abs(deltaX) ? deltaY : deltaX
+        let delta = Swift.abs(deltaY) >= Swift.abs(deltaX) ? deltaY : deltaX
         guard delta != 0 else { return nil }
         let sensitivity = (hasPreciseScrollingDeltas ? 0.012 : 0.12)
             * max(0.25, sensitivityMultiplier)

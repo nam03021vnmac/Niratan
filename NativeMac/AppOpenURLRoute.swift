@@ -2,12 +2,13 @@ import Foundation
 
 enum AppOpenURLRoute: Equatable {
     case localFile(URL)
+    case localPDF(URL)
     case dictionarySearch(String)
     case remoteBook(URL)
 
     init?(url: URL) {
         if url.isFileURL {
-            self = .localFile(url)
+            self = url.pathExtension.lowercased() == "pdf" ? .localPDF(url) : .localFile(url)
             return
         }
 

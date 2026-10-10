@@ -788,9 +788,9 @@ final class SyncStorage {
     }
 
     static func samePlayback(_ lhs: SyncPlayback, _ rhs: SyncPlayback) -> Bool {
-        abs(lhs.lastPosition - rhs.lastPosition) < 0.001
-            && abs(lhs.delay - rhs.delay) < 0.001
-            && abs(lhs.rate - rhs.rate) < 0.0001
+        Swift.abs(lhs.lastPosition - rhs.lastPosition) < 0.001
+            && Swift.abs(lhs.delay - rhs.delay) < 0.001
+            && Swift.abs(lhs.rate - rhs.rate) < 0.0001
     }
 
     // MARK: - Library actions

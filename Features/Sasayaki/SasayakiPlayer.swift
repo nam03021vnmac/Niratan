@@ -487,7 +487,7 @@ class SasayakiPlayer {
         )
         let asset: AVAsset
         let exportRange: CMTimeRange
-        if abs(playbackRate - 1) < 0.001 {
+        if Swift.abs(playbackRate - 1) < 0.001 {
             asset = sourceAsset
             exportRange = sourceRange
         } else {
@@ -592,7 +592,7 @@ class SasayakiPlayer {
             return matches.index(before: matches.endIndex)
         }
         let previous = matches.index(before: low)
-        return abs(matches[previous].startTime - time) <= abs(matches[low].startTime - time) ? previous : low
+        return Swift.abs(matches[previous].startTime - time) <= Swift.abs(matches[low].startTime - time) ? previous : low
     }
 
     private func navigateToCue(_ cue: SasayakiMatch, startPlayback: Bool = false) {
@@ -634,7 +634,7 @@ class SasayakiPlayer {
     private func tick(_ seconds: Double) {
         guard !isRestoring else { return }
         if let pendingSeekPosition {
-            guard abs(seconds - pendingSeekPosition) <= seekLandingTolerance else { return }
+            guard Swift.abs(seconds - pendingSeekPosition) <= seekLandingTolerance else { return }
             self.pendingSeekPosition = nil
         }
 

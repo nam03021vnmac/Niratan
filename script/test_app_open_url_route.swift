@@ -5,6 +5,11 @@ import Foundation
 private enum AppOpenURLRouteTests {
     static func main() {
         expect(
+            AppOpenURLRoute(url: URL(fileURLWithPath: "/tmp/document.PDF")),
+            .localPDF(URL(fileURLWithPath: "/tmp/document.PDF")),
+            "PDF file URLs should route to the PDF reader rather than EPUB import"
+        )
+        expect(
             AppOpenURLRoute(url: URL(fileURLWithPath: "/tmp/book.epub")),
             .localFile(URL(fileURLWithPath: "/tmp/book.epub")),
             "file URLs should route to local import"

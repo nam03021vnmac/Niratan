@@ -175,7 +175,7 @@ nonisolated enum MangaOCRPageTiling {
                         break
                     }
                     guard matches else { continue }
-                    let deviation = abs(Double(k + max(trimA, trimB)) - expected)
+                    let deviation = Swift.abs(Double(k + max(trimA, trimB)) - expected)
                     if deviation > max(1.5, expected / 2) { continue }
                     let score = Double(trimA + trimB) * 10 + deviation
                     if score < bestScore {

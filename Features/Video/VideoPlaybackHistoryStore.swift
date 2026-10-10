@@ -119,17 +119,17 @@ nonisolated struct VideoPlaybackResumeOptions: Codable, Equatable, Sendable {
 
     init(snapshot: VideoPlaybackSnapshot) {
         let normalizedSpeed = Self.normalizedSpeed(snapshot.speed)
-        speed = abs(normalizedSpeed - Self.normalSpeed) >= 0.001
+        speed = Swift.abs(normalizedSpeed - Self.normalSpeed) >= 0.001
             ? normalizedSpeed
             : nil
 
         let normalizedSubtitleDelay = Self.normalizedSubtitleDelay(snapshot.subtitleDelay)
-        subtitleDelay = abs(normalizedSubtitleDelay) >= 0.005
+        subtitleDelay = Swift.abs(normalizedSubtitleDelay) >= 0.005
             ? normalizedSubtitleDelay
             : nil
 
         let normalizedAudioDelay = Self.normalizedAudioDelay(snapshot.audioDelay)
-        audioDelay = abs(normalizedAudioDelay) >= 0.005
+        audioDelay = Swift.abs(normalizedAudioDelay) >= 0.005
             ? normalizedAudioDelay
             : nil
 

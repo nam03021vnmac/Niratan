@@ -3,6 +3,7 @@ import SwiftUI
 enum NativeMacSection: String, CaseIterable, Identifiable {
     case bookshelf
     case manga
+    case pdf
     case dictionary
     case video
     case settings
@@ -17,6 +18,8 @@ enum NativeMacSection: String, CaseIterable, Identifiable {
             "Bookshelf"
         case .manga:
             "Manga"
+        case .pdf:
+            "PDF"
         case .dictionary:
             "Dictionary"
         case .video:
@@ -32,6 +35,8 @@ enum NativeMacSection: String, CaseIterable, Identifiable {
             "Bookshelf and sync"
         case .manga:
             "Local manga library"
+        case .pdf:
+            "Local PDF library"
         case .dictionary:
             "Dictionary search"
         case .video:
@@ -47,6 +52,8 @@ enum NativeMacSection: String, CaseIterable, Identifiable {
             "books.vertical"
         case .manga:
             "book.pages"
+        case .pdf:
+            "doc.richtext"
         case .dictionary:
             "character.book.closed"
         case .video:

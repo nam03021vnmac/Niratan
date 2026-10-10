@@ -85,6 +85,13 @@ Long-term direction:
 - Follow Fushi's desktop manga reader model behind one `MangaReaderSettings` value: global settings live in UserDefaults and sparse per-title overrides in the App-owned `manga_reader_overrides.json`; legacy layout, direction, zoom, processing and OCR keys migrate once. Paged, vertical-paged and long-strip modes share one spread resolver (optional lone cover, wide pages alone, automatic landscape spreads), click-zone resolver, chapter auto-advance, page transitions, Core Image page filters, panel navigation and rebindable `.manga` shortcuts; the AppKit canvas owns pointer, wheel, drag and zoom handling while SwiftUI owns the toolbar, inspector and overlays.
 - Keep on-device OCR inside `Features/Manga/OCR` behind `MangaOCREngineRouter`. ONNX Runtime (pinned SPM binary, CPU execution) runs Fushi's detector, manga-tuned CTC, manga-ocr and panel models; models are App-global, downloaded only on request from pinned revisions and verified by size and SHA-256. Apple Vision reads detector-guided per-block crops when the detector is installed and whole pages otherwise. Each engine caches pages under its own engine signature, with Google Lens keeping its original per-language directory; nothing on these paths uploads page images.
 
+## PDF Learning
+
+- PDF is a local fixed-layout document surface in `Features/PDF`, rendered by PDFKit through `NativeMac/NativePDFView.swift` and an AppKit-owned window. It does not convert PDFs into EPUB chapters or replace Manga's page-provider/reader boundaries.
+- Native range selections and macOS 26 Vision document OCR produce UTF-16 text spans in unrotated PDF page coordinates. OCR uses Japanese on-device recognition only, with a bounded raster and the inverse of its actual crop/rotation transform. Shared candidate resolution, Popup presentation/rendering, dictionary audio and text mining remain source-neutral.
+- `pdf_library.json`, covers and OCR cache are App-owned; source PDFs are read-only security-scoped files. Removal changes the index only. Resume/reader preferences are local App-global data, while each lookup explicitly carries the active global Profile ID and is dismissed on Profile changes.
+- UI and worker PDFDocuments are separate. Cancelled/replaced sessions cannot publish OCR or obsolete progress; persistent OCR identity includes the source content digest, page geometry, engine/OS and render policy. Recognition is serial and bounded to the current/clicked page plus two visible neighbors. Encrypted PDFs do not persist recognized text or covers, and OCR cannot bypass extraction restrictions. PDF is not included in EPUB library sync, Fushi sync, audiobook alignment or reading statistics.
+
 ## Video Learning
 
 Long-term direction:

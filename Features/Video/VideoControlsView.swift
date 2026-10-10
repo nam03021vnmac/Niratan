@@ -760,7 +760,7 @@ struct VideoControlsView: View {
 
     private var selectedPresetSpeed: Double {
         let normalizedSpeed = VideoPlaybackSpeed.normalized(snapshot.speed)
-        return VideoPlaybackSpeed.presetChoices.first { abs($0 - normalizedSpeed) < 0.001 } ?? normalizedSpeed
+        return VideoPlaybackSpeed.presetChoices.first { Swift.abs($0 - normalizedSpeed) < 0.001 } ?? normalizedSpeed
     }
 
     private var sliderSpeed: Double {
@@ -771,7 +771,7 @@ struct VideoControlsView: View {
     }
 
     private func isSpeedSelected(_ speed: Double) -> Bool {
-        abs(selectedPresetSpeed - VideoPlaybackSpeed.normalized(speed)) < 0.001
+        Swift.abs(selectedPresetSpeed - VideoPlaybackSpeed.normalized(speed)) < 0.001
     }
 
     private func setSpeed(_ speed: Double) {
@@ -812,7 +812,7 @@ struct VideoControlsView: View {
         }
 
         if let timelinePreview,
-           abs(timelinePreview.time - previewTime) < 0.75 {
+           Swift.abs(timelinePreview.time - previewTime) < 0.75 {
             return VideoTimelinePreview(
                 time: previewTime,
                 pngData: timelinePreview.pngData
@@ -1079,7 +1079,7 @@ private struct VideoTimelineChapterMarkers: View {
                       chapter.startTime < duration else {
                     return
                 }
-                guard result.last.map({ abs($0 - chapter.startTime) >= 0.05 }) ?? true else {
+                guard result.last.map({ Swift.abs($0 - chapter.startTime) >= 0.05 }) ?? true else {
                     return
                 }
                 result.append(chapter.startTime)

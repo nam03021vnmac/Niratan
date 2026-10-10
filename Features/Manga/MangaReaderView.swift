@@ -43,7 +43,7 @@ struct MangaReaderView: View {
         )
     }
 
-    var body: some View {
+    private var readerPresentation: some View {
         GeometryReader { geometry in
             ZStack(alignment: .top) {
                 readerContent
@@ -168,6 +168,10 @@ struct MangaReaderView: View {
         } message: {
             Text("Recognizing an entire manga sends a reduced copy of every page without Mokuro text to Google. Results are cached on this Mac so reopening does not recognize the same pages again. Google Lens requires an internet connection.")
         }
+    }
+
+    var body: some View {
+        readerPresentation
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(.home) {

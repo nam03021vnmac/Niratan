@@ -17,7 +17,7 @@ struct NativeMacDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 switch section {
-                case .bookshelf, .manga:
+                case .bookshelf, .manga, .pdf:
                     NativeShelfPageBackground()
                 case .dictionary, .video, .settings:
                     NativeGlassPageBackground()
@@ -44,6 +44,8 @@ struct NativeMacDetailView: View {
                 )
             case .dictionary:
                 NativeDictionaryPlaceholderView(request: dictionaryRequest)
+            case .pdf:
+                NativePDFLibraryDetailView()
             case .video:
                 VideoLibraryView(
                     onOpenVideo: onOpenVideo,

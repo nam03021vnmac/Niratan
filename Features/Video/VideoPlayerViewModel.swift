@@ -268,7 +268,7 @@ final class VideoPlayerViewModel {
     func setSubtitleGapFastForwardSpeed(_ speed: Double) {
         subtitleGapFastForwardSpeed = Self.normalizedSubtitleGapFastForwardSpeed(speed)
         if subtitleGapFastForwardBaseSpeed != nil
-            && abs(snapshot.speed - subtitleGapFastForwardSpeed) >= 0.001 {
+            && Swift.abs(snapshot.speed - subtitleGapFastForwardSpeed) >= 0.001 {
             engine.setSpeed(subtitleGapFastForwardSpeed)
         }
     }
@@ -289,7 +289,7 @@ final class VideoPlayerViewModel {
         if subtitleGapFastForwardBaseSpeed == nil {
             subtitleGapFastForwardBaseSpeed = snapshot.speed
         }
-        if abs(snapshot.speed - subtitleGapFastForwardSpeed) >= 0.001 {
+        if Swift.abs(snapshot.speed - subtitleGapFastForwardSpeed) >= 0.001 {
             engine.setSpeed(subtitleGapFastForwardSpeed)
         }
     }
@@ -739,7 +739,7 @@ final class VideoPlayerViewModel {
         guard let baseSpeed = subtitleGapFastForwardBaseSpeed else { return }
         subtitleGapFastForwardBaseSpeed = nil
         let normalizedBaseSpeed = VideoPlaybackSpeed.normalized(baseSpeed)
-        if abs(snapshot.speed - normalizedBaseSpeed) >= 0.001 {
+        if Swift.abs(snapshot.speed - normalizedBaseSpeed) >= 0.001 {
             engine.setSpeed(normalizedBaseSpeed)
         }
     }

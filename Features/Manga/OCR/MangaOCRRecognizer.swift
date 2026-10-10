@@ -407,7 +407,9 @@ nonisolated final class MangaOCRRecognizer: @unchecked Sendable {
                     let r = Int(pixels[offset])
                     let g = Int(pixels[offset + 1])
                     let b = Int(pixels[offset + 2])
-                    gray[row * w + column] = UInt8((19595 * r + 38470 * g + 7471 * b + 32768) >> 16)
+                    let redGreen = 19595 * r + 38470 * g
+                    let luminance = (redGreen + 7471 * b + 32768) >> 16
+                    gray[row * w + column] = UInt8(luminance)
                 }
             }
         }
@@ -436,7 +438,7 @@ nonisolated final class MangaOCRRecognizer: @unchecked Sendable {
             var weights: [Double] = []
             if end > start {
                 for source in start..<end {
-                    weights.append(max(0, 1 - abs((Double(source) - center + 0.5) / support)))
+                    weights.append(max(0, 1 - Swift.abs((Double(source) - center + 0.5) / support)))
                 }
             }
             let sum = weights.reduce(0, +)
