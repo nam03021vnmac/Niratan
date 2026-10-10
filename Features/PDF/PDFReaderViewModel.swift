@@ -36,6 +36,7 @@ final class PDFReaderViewModel {
 
     func open(password: String? = nil) {
         guard !closed else { return }
+        PopupWebViewPool.prewarm()
         loadTask?.cancel()
         isLoading = true; errorMessage = nil; needsPassword = false
         loadTask = Task {
@@ -194,7 +195,6 @@ final class PDFReaderViewModel {
     }
 
     func dismissLookup() {
-        surface?.cancelPendingLookup()
         popupPresentation.popups.removeAll()
         highlightRects = []; lookupProfileID = nil
         surface?.highlight.setNeedsDisplay(surface?.highlight.bounds ?? .zero)

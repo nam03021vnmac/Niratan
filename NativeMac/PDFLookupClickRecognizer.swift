@@ -1,8 +1,8 @@
 import AppKit
 
 /// Observes PDFKit's native event sequence without delaying or consuming it.
-/// The surface defers lookup through the system double-click interval so the
-/// first click of a native double/triple selection never steals the second.
+/// A stationary single click ends the gesture at mouse-up; a following click
+/// of a double/triple selection dismisses that popup on its mouse-down.
 @MainActor
 final class PDFLookupClickRecognizer: NSGestureRecognizer {
     var onPointerDown: (() -> Void)?

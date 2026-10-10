@@ -31,7 +31,6 @@ final class NativePDFSurface: NSView, NSGestureRecognizerDelegate {
     private var lastGeometry: (page: Int, position: CGPoint, scale: CGFloat, size: CGSize, visible: [Int])?
     private var applyingSettings = false
     private var expectedFitScale: CGFloat?
-    private var pendingLookup: Task<Void, Never>?
     // Sample inside the visible page rather than the inter-page gap. Restore
     // this same sample point; it is not padding added to PDF content.
     private let progressAnchorInset: CGFloat = 40
@@ -201,7 +200,6 @@ final class NativePDFSurface: NSView, NSGestureRecognizerDelegate {
            Swift.abs(previous.position.y - normalized.y) < 0.00001,
            previous.scale == pdf.scaleFactor, previous.size == bounds.size, previous.visible == visibleIndices { return }
         lastGeometry = (index, normalized, pdf.scaleFactor, bounds.size, visibleIndices)
-        pendingLookup?.cancel()
         // PDFKit notifications can happen while SwiftUI updates the bridge.
         DispatchQueue.main.async { [weak self, weak model] in
             guard self?.model === model, self?.restoring == false else { return }
@@ -212,15 +210,13 @@ final class NativePDFSurface: NSView, NSGestureRecognizerDelegate {
 
     func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer) -> Bool { true }
 
+    /// Look up on mouse-up without waiting out the double-click interval. The
+    /// popup opens beside the word, so a second click still reaches PDFKit;
+    /// its mouse-down dismisses the popup and native word/line selection
+    /// proceeds as usual.
     @objc private func clicked(_ gesture: PDFLookupClickRecognizer) {
-        pendingLookup?.cancel()
-        let point = pdf.convert(gesture.clickLocationInWindow, from: nil)
-        pendingLookup = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(NSEvent.doubleClickInterval))
-            guard !Task.isCancelled, let self, self.window?.isKeyWindow == true else { return }
-            self.pendingLookup = nil
-            self.performLookup(at: point)
-        }
+        guard window?.isKeyWindow == true else { return }
+        performLookup(at: pdf.convert(gesture.clickLocationInWindow, from: nil))
     }
 
     private func performLookup(at point: CGPoint) {
@@ -235,7 +231,6 @@ final class NativePDFSurface: NSView, NSGestureRecognizerDelegate {
     }
 
     @objc private func secondaryClick(_ gesture: NSClickGestureRecognizer) {
-        pendingLookup?.cancel()
         guard let model, let page = pdf.page(for: gesture.location(in: pdf), nearest: false), let document = pdf.document,
               let text = model.recognizedText(page: document.index(for: page), point: pdf.convert(gesture.location(in: pdf), to: page)) else { return }
         let menu = NSMenu()
@@ -247,9 +242,7 @@ final class NativePDFSurface: NSView, NSGestureRecognizerDelegate {
         guard let text = sender.representedObject as? String else { return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
     }
-    func cancelPendingLookup() { pendingLookup?.cancel(); pendingLookup = nil }
     func detach() {
-        pendingLookup?.cancel(); pendingLookup = nil
         for token in observers + clipObservers { NotificationCenter.default.removeObserver(token) }
         observers = []; clipObservers = []; clipIdentities = []; pdf.document = nil; model = nil
     }

@@ -164,6 +164,52 @@ struct PopupInlineLookupResult {
     let matchedCharacterCount: Int
 }
 
+/// Keeps one popup web view created and loaded ahead of time. A new
+/// WKWebView starts its own web content process: about 120 ms before the
+/// popup's page has loaded (about 400 ms for the first one). Loading into a
+/// spare whose process is already running takes about 25 ms.
+@MainActor
+enum PopupWebViewPool {
+    private static var spare: NativePopupWKWebView?
+    private static var refill: Task<Void, Never>?
+
+    /// Start the spare before the first popup, e.g. when a reader opens.
+    static func prewarm() { scheduleRefill(after: .zero) }
+
+    fileprivate static func take() -> NativePopupWKWebView {
+        let webView = spare ?? makeWebView()
+        spare = nil
+        // Refill once the popup has appeared, not during its animation.
+        scheduleRefill(after: .milliseconds(800))
+        return webView
+    }
+
+    private static func scheduleRefill(after delay: Duration) {
+        guard spare == nil, refill == nil else { return }
+        refill = Task {
+            try? await Task.sleep(for: delay)
+            refill = nil
+            guard spare == nil else { return }
+            let webView = makeWebView()
+            webView.loadHTMLString("<!DOCTYPE html><html></html>", baseURL: Bundle.main.resourceURL)
+            spare = webView
+        }
+    }
+
+    /// URL scheme handlers must be in the configuration before the web view
+    /// exists; script message handlers are added when the popup takes it.
+    private static func makeWebView() -> NativePopupWKWebView {
+        let config = WKWebViewConfiguration()
+        config.setURLSchemeHandler(AudioHandler(), forURLScheme: "audio")
+        config.setURLSchemeHandler(ImageHandler(), forURLScheme: "image")
+        config.setURLSchemeHandler(DocumentResourceHandler(), forURLScheme: "local-resources")
+        config.mediaTypesRequiringUserActionForPlayback = []
+        let webView = NativePopupWKWebView(frame: .zero, configuration: config)
+        webView.setValue(false, forKey: "drawsBackground")
+        return webView
+    }
+}
+
 private final class NativePopupWKWebView: HoshiShiftHoverWKWebView {
     var onLayoutChanged: (() -> Void)?
 
@@ -219,7 +265,8 @@ struct PopupWebView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
+        let webView = PopupWebViewPool.take()
+        let config = webView.configuration
         config.userContentController.add(context.coordinator, name: "openLink")
         config.userContentController.add(context.coordinator, name: "textSelected")
         config.userContentController.add(context.coordinator, name: "tapOutside")
@@ -236,13 +283,6 @@ struct PopupWebView: NSViewRepresentable {
         config.userContentController.addScriptMessageHandler(context.coordinator, contentWorld: .page, name: "lookupRedirect")
         config.userContentController.addScriptMessageHandler(context.coordinator, contentWorld: .page, name: "kanjiRedirect")
         config.userContentController.addScriptMessageHandler(context.coordinator, contentWorld: .page, name: "queryTextSelected")
-        config.setURLSchemeHandler(AudioHandler(), forURLScheme: "audio")
-        config.setURLSchemeHandler(ImageHandler(), forURLScheme: "image")
-        config.setURLSchemeHandler(DocumentResourceHandler(), forURLScheme: "local-resources")
-        config.mediaTypesRequiringUserActionForPlayback = []
-
-        let webView = NativePopupWKWebView(frame: .zero, configuration: config)
-        webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = context.coordinator
         webView.onLayoutChanged = { [weak coordinator = context.coordinator, weak webView] in
             guard let webView else { return }
