@@ -1,3 +1,4 @@
+import Accelerate
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -41,11 +42,14 @@ nonisolated struct MangaOCRBitmap: Sendable {
             }
             guard drawn else { return nil }
             var rgb = [UInt8](repeating: 0, count: width * height * 3)
-            for index in 0..<(width * height) {
-                let value = gray[index]
-                rgb[index * 3] = value
-                rgb[index * 3 + 1] = value
-                rgb[index * 3 + 2] = value
+            gray.withUnsafeMutableBytes { gray in
+                rgb.withUnsafeMutableBytes { rgb in
+                    var plane = vImage_Buffer(data: gray.baseAddress, height: vImagePixelCount(height),
+                                              width: vImagePixelCount(width), rowBytes: width)
+                    var destination = vImage_Buffer(data: rgb.baseAddress, height: vImagePixelCount(height),
+                                                    width: vImagePixelCount(width), rowBytes: width * 3)
+                    _ = vImageConvert_Planar8toRGB888(&plane, &plane, &plane, &destination, vImage_Flags(kvImageNoFlags))
+                }
             }
             self.init(width: width, height: height, pixels: rgb)
             return
@@ -70,13 +74,13 @@ nonisolated struct MangaOCRBitmap: Sendable {
         }
         guard drawn else { return nil }
         var rgb = [UInt8](repeating: 0, count: width * height * 3)
-        rgba.withUnsafeBufferPointer { source in
-            rgb.withUnsafeMutableBufferPointer { destination in
-                for index in 0..<(width * height) {
-                    destination[index * 3] = source[index * 4]
-                    destination[index * 3 + 1] = source[index * 4 + 1]
-                    destination[index * 3 + 2] = source[index * 4 + 2]
-                }
+        rgba.withUnsafeMutableBytes { rgba in
+            rgb.withUnsafeMutableBytes { rgb in
+                var source = vImage_Buffer(data: rgba.baseAddress, height: vImagePixelCount(height),
+                                           width: vImagePixelCount(width), rowBytes: width * 4)
+                var destination = vImage_Buffer(data: rgb.baseAddress, height: vImagePixelCount(height),
+                                                width: vImagePixelCount(width), rowBytes: width * 3)
+                _ = vImageConvert_RGBA8888toRGB888(&source, &destination, vImage_Flags(kvImageNoFlags))
             }
         }
         self.init(width: width, height: height, pixels: rgb)
@@ -89,12 +93,9 @@ nonisolated struct MangaOCRBitmap: Sendable {
         var output = [UInt8](repeating: 0, count: w * h * 3)
         pixels.withUnsafeBufferPointer { source in
             output.withUnsafeMutableBufferPointer { destination in
+                guard let source = source.baseAddress, let destination = destination.baseAddress else { return }
                 for row in 0..<h {
-                    let sourceStart = ((y + row) * width + x) * 3
-                    let destinationStart = row * w * 3
-                    for column in 0..<(w * 3) {
-                        destination[destinationStart + column] = source[sourceStart + column]
-                    }
+                    (destination + row * w * 3).update(from: source + ((y + row) * width + x) * 3, count: w * 3)
                 }
             }
         }
@@ -135,6 +136,8 @@ nonisolated struct MangaOCRBitmap: Sendable {
         return (cropped(x: x, y: y, width: w, height: h), x, y)
     }
 
+    private static let levels: [Double] = (0..<256).map(Double.init)
+
     /// `package:image` `copyResize(interpolation: linear)`: point-sample at
     /// `(x * srcW/dstW, y * srcH/dstH)` with bilinear blending of the four
     /// neighbours, truncating to 8 bits.
@@ -142,34 +145,50 @@ nonisolated struct MangaOCRBitmap: Sendable {
         if dstWidth == width && dstHeight == height { return self }
         let dx = Double(width) / Double(dstWidth)
         let dy = Double(height) / Double(dstHeight)
+        // Column sample offsets repeat on every row; -1 marks a right neighbour
+        // past the edge.
+        var left = [Int](repeating: 0, count: dstWidth)
+        var right = [Int](repeating: 0, count: dstWidth)
+        var weights = [Double](repeating: 0, count: dstWidth)
+        for x in 0..<dstWidth {
+            let fx = Double(x) * dx
+            let x0 = Int(fx)
+            left[x] = x0 * 3
+            right[x] = x0 + 1 >= width ? -1 : (x0 + 1) * 3
+            weights[x] = fx - Double(x0)
+        }
+        let levels = Self.levels
         var output = [UInt8](repeating: 0, count: dstWidth * dstHeight * 3)
         pixels.withUnsafeBufferPointer { source in
             output.withUnsafeMutableBufferPointer { destination in
+                guard let source = source.baseAddress, let destination = destination.baseAddress else { return }
                 for y in 0..<dstHeight {
                     let fy = Double(y) * dy
                     let y0 = Int(fy)
                     let ny = y0 + 1
                     let wy = fy - Double(y0)
+                    let row = y0 * width * 3
+                    let nextRow = ny >= height ? -1 : ny * width * 3
+                    var target = destination + y * dstWidth * 3
                     for x in 0..<dstWidth {
-                        let fx = Double(x) * dx
-                        let x0 = Int(fx)
-                        let nx = x0 + 1
-                        let wx = fx - Double(x0)
-                        let cc = (y0 * width + x0) * 3
-                        let cn = ny >= height ? cc : (ny * width + x0) * 3
-                        let nc = nx >= width ? cc : (y0 * width + nx) * 3
-                        let nn = (nx >= width || ny >= height) ? cc : (ny * width + nx) * 3
-                        let target = (y * dstWidth + x) * 3
-                        for channel in 0..<3 {
-                            let icc = Double(source[cc + channel])
-                            let inc = Double(source[nc + channel])
-                            let icn = Double(source[cn + channel])
-                            let inn = Double(source[nn + channel])
+                        let cc = row + left[x]
+                        let cn = nextRow < 0 ? cc : nextRow + left[x]
+                        let nc = right[x] < 0 ? cc : row + right[x]
+                        let nn = (right[x] < 0 || nextRow < 0) ? cc : nextRow + right[x]
+                        let wx = weights[x]
+                        // Unrolled: a range loop per channel dominates unoptimized builds.
+                        func blend(_ channel: Int) {
+                            let icc = levels[Int(source[cc + channel])]
+                            let inc = levels[Int(source[nc + channel])]
+                            let icn = levels[Int(source[cn + channel])]
+                            let inn = levels[Int(source[nn + channel])]
                             let value = icc
                                 + wx * (inc - icc + wy * (icc + inn - icn - inc))
                                 + wy * (icn - icc)
-                            destination[target + channel] = UInt8(max(0, min(255, value)))
+                            target[channel] = UInt8(max(0, min(255, value)))
                         }
+                        blend(0); blend(1); blend(2)
+                        target += 3
                     }
                 }
             }

@@ -142,6 +142,7 @@
 				Manga/OCR/MangaOCRBitmap.swift,
 				Manga/OCR/MangaOCRInference.swift,
 				Manga/OCR/MangaOCRLineLayout.swift,
+				Manga/OCR/MangaOCRModelShape.swift,
 				Manga/OCR/MangaOCRModelStore.swift,
 				Manga/OCR/MangaOCRReadingOrder.swift,
 				Manga/OCR/MangaOCRRecognizer.swift,

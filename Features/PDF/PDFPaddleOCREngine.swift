@@ -18,12 +18,33 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
 
     private init(store: MangaOCRModelStore) throws {
         let url = { store.url(for: $0) }
-        detector = try MangaPPLineDetector(modelURL: url(MangaOCRModelSet.lineDetectorFile))
+        let fingerprint = store.fingerprint(for: .pdfOCR)
+        detector = try MangaPPLineDetector(
+            modelURL: url(MangaOCRModelSet.lineDetectorFile),
+            staticShapeCache: Self.compiledDetectorDirectory(fingerprint: fingerprint)
+        )
         recognizer = try MangaPPLineRecognizer(
             modelURL: url(MangaOCRModelSet.lineRecognizerFile),
             dictionaryURL: url(MangaOCRModelSet.lineDictionaryFile)
         )
-        identity = "\(Self.revision)-\(store.fingerprint(for: .pdfOCR))|\(Self.detectorMaxSide)"
+        identity = "\(Self.revision)-\(fingerprint)|\(Self.detectorMaxSide)"
+    }
+
+    private static var compiledDetectorRoot: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("NiratanPDFOCRCoreML", isDirectory: true)
+    }
+
+    /// Core ML detector programs for this model set and runtime; programs
+    /// for other models or runtimes are stale and removed.
+    private static func compiledDetectorDirectory(fingerprint: String) -> URL? {
+        guard let root = compiledDetectorRoot else { return nil }
+        let name = "\(fingerprint)-ort\(MangaOCRSession.runtimeVersion)"
+        for stale in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        where stale.lastPathComponent != name {
+            try? FileManager.default.removeItem(at: stale)
+        }
+        return root.appendingPathComponent(name, isDirectory: true)
     }
 
     /// The loaded engine, or nil while the model set is not downloaded.
@@ -37,8 +58,12 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
         }
     }
 
-    /// Release the ONNX sessions, e.g. after the models are deleted.
-    static func unload() { loaded.withLock { $0 = nil } }
+    /// Release the ONNX sessions and their compiled Core ML programs, e.g.
+    /// after the models are deleted.
+    static func unload() {
+        loaded.withLock { $0 = nil }
+        if let root = compiledDetectorRoot { try? FileManager.default.removeItem(at: root) }
+    }
 
     func recognize(image: CGImage) throws -> [PDFOCRRecognizedLine] {
         try Task.checkCancellation()

@@ -27,7 +27,14 @@ nonisolated final class MangaOCRSession: @unchecked Sendable {
     enum Provider: Sendable {
         case cpu
         case coreML
+        /// Core ML for a model whose input shape is fixed (see
+        /// `MangaOCRModelShape`); compiled programs are cached in
+        /// `cacheDirectory`, which must be unique to the model file.
+        case coreMLStatic(cacheDirectory: URL)
     }
+
+    /// Changes whenever cached Core ML conversions may no longer match.
+    static var runtimeVersion: String { ORTVersion() ?? "unknown" }
 
     nonisolated(unsafe) private static let environment: ORTEnv? = try? ORTEnv(loggingLevel: .warning)
 
@@ -41,10 +48,22 @@ nonisolated final class MangaOCRSession: @unchecked Sendable {
         }
         let options = try ORTSessionOptions()
         try options.setGraphOptimizationLevel(.all)
-        if provider == .coreML {
+        switch provider {
+        case .cpu:
+            break
+        case .coreML:
             let coreML = ORTCoreMLExecutionProviderOptions()
             coreML.createMLProgram = true
             try options.appendCoreMLExecutionProvider(with: coreML)
+        case .coreMLStatic(let cacheDirectory):
+            try options.appendCoreMLExecutionProvider(withOptionsV2: [
+                "ModelFormat": "MLProgram",
+                // As fast as CPUAndGPU for the DB detector, with about 400 MB
+                // less resident memory; Neural Engine alone is slower than the CPU.
+                "MLComputeUnits": "ALL",
+                "RequireStaticInputShapes": "1",
+                "ModelCacheDirectory": cacheDirectory.path,
+            ])
         }
         do {
             session = try ORTSession(env: environment, modelPath: modelURL.path, sessionOptions: options)
@@ -78,10 +97,15 @@ nonisolated final class MangaOCRSession: @unchecked Sendable {
         for (name, value) in outputs {
             guard let info = try? value.tensorTypeAndShapeInfo(),
                   let data = try? value.tensorData() else { continue }
+            // Wrap ORT's buffer instead of bridging, which copies mutable
+            // data (recognizer logits are megabytes per line); the
+            // deallocator keeps the owning value alive.
             result[name] = MangaOCRTensor(
                 shape: info.shape.map(\.intValue),
                 elementType: info.elementType,
-                data: data as Data
+                data: Data(bytesNoCopy: data.mutableBytes, count: data.length, deallocator: .custom { _, _ in
+                    withExtendedLifetime((value, data)) {}
+                })
             )
         }
         return result
