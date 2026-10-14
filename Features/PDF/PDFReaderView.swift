@@ -122,15 +122,21 @@ struct PDFReaderView: View {
                     Text("Apple Vision").tag(PDFOCREngineChoice.vision.rawValue)
                 }
                 .onChange(of: engineRaw) { model.engineChanged() }
-                if models.statuses[.pdfOCR]?.isReady != true {
-                    if models.isDownloading(.pdfOCR) {
-                        Button("Cancel PP-OCR Download") { models.cancel(.pdfOCR) }
+                Toggle("Read as Manga", isOn: $model.item.isManga)
+                    .onChange(of: model.item.isManga) { model.engineChanged(); model.save() }
+                let modelSet = model.item.lineOCRModel.modelSet
+                if models.statuses[modelSet]?.isReady != true {
+                    if models.isDownloading(modelSet) {
+                        Button("Cancel PP-OCR Download") { models.cancel(modelSet) }
                     } else {
-                        Button("Download PP-OCR Models (\(ByteCountFormatter.string(fromByteCount: MangaOCRModelSet.pdfOCR.totalBytes, countStyle: .file)))") {
-                            models.download(.pdfOCR)
+                        let size = ByteCountFormatter.string(fromByteCount: modelSet.totalBytes, countStyle: .file)
+                        if model.item.isManga {
+                            Button("Download PP-OCR Manga Models (\(size))") { models.download(modelSet) }
+                        } else {
+                            Button("Download PP-OCR Models (\(size))") { models.download(modelSet) }
                         }
                     }
-                    if let error = models.errors[.pdfOCR] { Text(error) }
+                    if let error = models.errors[modelSet] { Text(error) }
                 }
                 Button("Recognize This Page") { model.loadText(page: model.item.pageIndex, forceOCR: true) }
                     .disabled(model.document == nil || model.isRecognizing)
@@ -144,6 +150,7 @@ struct PDFReaderView: View {
                 Divider()
                 Text("Text recognition runs on this Mac. Only Japanese OCR is supported.")
                 Text("For scanned text with a selectable header, choose Recognize This Page.")
+                Text("Read as Manga uses the manga-tuned PP-OCR recognizer for this PDF.")
             }
         }
     }

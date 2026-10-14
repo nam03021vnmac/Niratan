@@ -54,7 +54,7 @@ final class PDFReaderViewModel {
                     let source = try PDFLibraryStore.shared.resolve(item)
                     url = source
                     accessing = source.startAccessingSecurityScopedResource()
-                    worker = PDFDocumentWorker(url: source, lineOCR: { try await PDFPaddleOCREngine.current() })
+                    worker = PDFDocumentWorker(url: source, lineOCR: { try await PDFPaddleOCREngine.current($0) })
                 }
                 guard let worker, let url else { throw PDFSupportError.unreadable }
                 let metadata = try await worker.prepare(password: password)
@@ -215,7 +215,8 @@ final class PDFReaderViewModel {
             task = flight.task
         } else {
             cancelInFlight()
-            task = Task(priority: quiet ? .utility : nil) { try await worker.recognize(page: page, useCache: !manual) }
+            let lineModel = item.lineOCRModel
+            task = Task(priority: quiet ? .utility : nil) { try await worker.recognize(page: page, useCache: !manual, lineModel: lineModel) }
             inFlight = (page, task)
         }
         defer { if inFlight?.task == task { inFlight = nil } }

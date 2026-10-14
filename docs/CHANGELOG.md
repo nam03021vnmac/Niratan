@@ -6,12 +6,12 @@ This changelog records user-visible changes only. Implementation details, invest
 
 ### 中文
 
-- 新增本地 PDF 书库与原生阅读窗口，可导入、拖入或从 Finder 打开 PDF，翻页、缩放并恢复阅读位置。点击文字使用现有词典弹窗；无可提取文字的页面在本机识别日语，扫描正文带有可选中页眉时可手动识别当前页。阅读时会在后台预先识别后面几页，也可在“日语 OCR”菜单中选择“识别所有页面”，在后台识别整本 PDF。原始 PDF 不会被修改或删除。
+- 新增本地 PDF 书库与原生阅读窗口，可导入、拖入或从 Finder 打开 PDF，翻页、缩放并恢复阅读位置。点击文字使用现有词典弹窗；无可提取文字的页面在本机识别日语，扫描正文带有可选中页眉时可手动识别当前页。阅读时会在后台预先识别后面几页，也可在“日语 OCR”菜单中选择“识别所有页面”，在后台识别整本 PDF。漫画 PDF 可在“日语 OCR”菜单中开启“作为漫画识别”，改用针对漫画优化的 PP-OCR 识别模型。原始 PDF 不会被修改或删除。
 - 修复初始化词典查词时可能发生的启动崩溃。
 
 ### English
 
-- Add a local PDF library and native reader with import, drop/Finder opening, page navigation, zoom and saved reading position. Click text to use the shared dictionary popup; pages without extractable text use on-device Japanese OCR, with manual page recognition for scans containing selectable headers. The next few pages are recognized in the background while you read, and Recognize All Pages in the Japanese OCR menu reads the whole PDF in the background. Source PDFs are never modified or deleted.
+- Add a local PDF library and native reader with import, drop/Finder opening, page navigation, zoom and saved reading position. Click text to use the shared dictionary popup; pages without extractable text use on-device Japanese OCR, with manual page recognition for scans containing selectable headers. The next few pages are recognized in the background while you read, and Recognize All Pages in the Japanese OCR menu reads the whole PDF in the background. Turn on Read as Manga in the same menu to read a manga PDF with the manga-tuned PP-OCR recognizer. Source PDFs are never modified or deleted.
 - Fix a startup crash while initializing dictionary lookup.
 
 ## 2.0.2

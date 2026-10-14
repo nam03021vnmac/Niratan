@@ -13,11 +13,12 @@ actor PDFDocumentWorker {
     private var revision: String?
     private var stamp: String?
     private let cacheDirectory: URL?
-    private let lineOCR: @Sendable () async throws -> (any PDFLineRecognizing)?
+    private let lineOCR: @Sendable (PDFLineOCRModel) async throws -> (any PDFLineRecognizing)?
 
-    /// `lineOCR` resolves the line-based engine, or nil while its models are
-    /// missing; without one only Apple Vision is available.
-    init(url: URL, cacheDirectory: URL? = nil, lineOCR: @escaping @Sendable () async throws -> (any PDFLineRecognizing)? = { nil }) {
+    /// `lineOCR` resolves the line-based engine for a recognizer, or nil
+    /// while its models are missing; without one only Apple Vision is available.
+    init(url: URL, cacheDirectory: URL? = nil,
+         lineOCR: @escaping @Sendable (PDFLineOCRModel) async throws -> (any PDFLineRecognizing)? = { _ in nil }) {
         self.url = url
         self.cacheDirectory = cacheDirectory
         self.lineOCR = lineOCR
@@ -90,7 +91,8 @@ actor PDFDocumentWorker {
         return PDFTextGeometry.joinWrappedLines(PDFTextGeometry.joinVerticalFragments(blocks))
     }
 
-    func recognize(page index: Int, useCache: Bool = true, choice: PDFOCREngineChoice = .stored()) async throws -> [PDFTextBlock] {
+    func recognize(page index: Int, useCache: Bool = true, choice: PDFOCREngineChoice = .stored(),
+                   lineModel: PDFLineOCRModel = .document) async throws -> [PDFTextBlock] {
         try Task.checkCancellation()
         try validateSource()
         guard let document, document.allowsCopying else { throw PDFSupportError.permission }
@@ -100,9 +102,11 @@ actor PDFDocumentWorker {
         case .vision:
             paddle = nil
         case .automatic:
-            paddle = try await lineOCR()
+            paddle = try await lineOCR(lineModel)
         case .paddle:
-            guard let engine = try await lineOCR() else { throw PDFSupportError.modelsMissing }
+            guard let engine = try await lineOCR(lineModel) else {
+                throw lineModel == .manga ? PDFSupportError.mangaModelsMissing : PDFSupportError.modelsMissing
+            }
             paddle = engine
         }
         let digest = try contentRevision()

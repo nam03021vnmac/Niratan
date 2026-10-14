@@ -23,6 +23,9 @@ nonisolated enum MangaOCRModelSet: String, CaseIterable, Sendable {
     /// PP-OCRv6 line detector + general recognizer for full document pages
     /// (PDF). Shares its files with `mangaOCR`.
     case pdfOCR
+    /// PP-OCRv6 line detector + manga-tuned recognizer for PDFs marked as
+    /// manga. Shares its files with `mangaCTC`.
+    case pdfMangaOCR
 
     static let detectorFile = MangaOCRModelFile(
         fileName: "detector-v4-s_int8.onnx",
@@ -106,6 +109,8 @@ nonisolated enum MangaOCRModelSet: String, CaseIterable, Sendable {
             [Self.panelFile]
         case .pdfOCR:
             [Self.lineDetectorFile, Self.lineRecognizerFile, Self.lineDictionaryFile]
+        case .pdfMangaOCR:
+            [Self.lineDetectorFile, Self.lineDictionaryFile, Self.mangaCTCRecognizerFile]
         }
     }
 

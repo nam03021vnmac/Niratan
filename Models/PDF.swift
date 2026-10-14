@@ -15,6 +15,15 @@ nonisolated struct PDFLibraryItem: Codable, Identifiable, Equatable, Sendable {
     var zoomScale: Double? = nil
     var automaticOCR: Bool = true
     var lastOpened: Date = .distantPast
+    /// Optional so catalogs written before it decode; nil means not manga.
+    var manga: Bool? = nil
+
+    /// Scanned manga reads with the manga-tuned PP-OCR recognizer.
+    var isManga: Bool {
+        get { manga ?? false }
+        set { manga = newValue ? true : nil }
+    }
+    var lineOCRModel: PDFLineOCRModel { isManga ? .manga : .document }
 
     var progress: Double { pageCount > 1 ? Double(pageIndex) / Double(pageCount - 1) : 0 }
 }
@@ -214,8 +223,16 @@ nonisolated enum PDFOCREngineChoice: String, CaseIterable, Sendable {
     }
 }
 
+/// The recognizer PP-OCR reads a PDF's lines with.
+nonisolated enum PDFLineOCRModel: String, Sendable {
+    /// PP-OCRv6 small: printed books and documents.
+    case document
+    /// Kellenok/PP-OCRv6_manga: manga lettering.
+    case manga
+}
+
 nonisolated enum PDFSupportError: LocalizedError {
-    case unreadable, locked, permission, catalog, changed, geometry, modelsMissing
+    case unreadable, locked, permission, catalog, changed, geometry, modelsMissing, mangaModelsMissing
     var errorDescription: String? {
         switch self {
         case .unreadable: String(localized: "Unable to read this PDF. Locate the file or import a valid PDF.")
@@ -225,6 +242,7 @@ nonisolated enum PDFSupportError: LocalizedError {
         case .changed: String(localized: "The PDF changed during reading. Close it and open it again.")
         case .geometry: String(localized: "This PDF page is too large or has invalid dimensions.")
         case .modelsMissing: String(localized: "Download the PP-OCR models from the Japanese OCR menu, or choose another engine.")
+        case .mangaModelsMissing: String(localized: "Download the PP-OCR manga models from the Japanese OCR menu, or choose another engine.")
         }
     }
 }

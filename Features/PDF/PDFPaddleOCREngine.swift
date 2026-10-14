@@ -2,32 +2,55 @@ import CoreGraphics
 import Foundation
 import os
 
+nonisolated extension PDFLineOCRModel {
+    var modelSet: MangaOCRModelSet {
+        switch self {
+        case .document: .pdfOCR
+        case .manga: .pdfMangaOCR
+        }
+    }
+
+    var recognizerFile: MangaOCRModelFile {
+        switch self {
+        case .document: MangaOCRModelSet.lineRecognizerFile
+        case .manga: MangaOCRModelSet.mangaCTCRecognizerFile
+        }
+    }
+}
+
+/// One recognizer of the shared engine, as the PDF worker sees it.
+nonisolated struct PDFPaddleOCRReader: PDFLineRecognizing {
+    let engine: PDFPaddleOCREngine
+    let model: PDFLineOCRModel
+    let identity: String
+
+    func recognize(image: CGImage) async throws -> [PDFOCRRecognizedLine] {
+        try await engine.recognize(image: image, model: model)
+    }
+}
+
 /// PP-OCR for dense document pages: DB line detection over the whole page
 /// (no speech-bubble stage), then CTC recognition per line with token
 /// positions. Vertical columns are re-laid out as upright glyph cells.
-actor PDFPaddleOCREngine: PDFLineRecognizing {
+/// One detector serves both recognizers: its Core ML programs are large and
+/// not safe to share between concurrent callers.
+actor PDFPaddleOCREngine {
     private static let revision = "pdf-ppocr-lines-v4"
     /// Longer detector side in pixels. 8.5–10 pt text at 240 dpi detects as
     /// well here as at 2048, at about half the cost on A4.
     private static let detectorMaxSide = 1536
     private static let loaded = OSAllocatedUnfairLock<PDFPaddleOCREngine?>(initialState: nil)
 
-    nonisolated let identity: String
+    private let store: MangaOCRModelStore
     private let detector: MangaPPLineDetector
-    private let recognizer: MangaPPLineRecognizer
+    private var recognizers: [PDFLineOCRModel: MangaPPLineRecognizer] = [:]
 
     private init(store: MangaOCRModelStore) throws {
-        let url = { store.url(for: $0) }
-        let fingerprint = store.fingerprint(for: .pdfOCR)
+        self.store = store
         detector = try MangaPPLineDetector(
-            modelURL: url(MangaOCRModelSet.lineDetectorFile),
-            staticShapeCache: Self.compiledDetectorDirectory(fingerprint: fingerprint)
+            modelURL: store.url(for: MangaOCRModelSet.lineDetectorFile),
+            staticShapeCache: Self.compiledDetectorDirectory()
         )
-        recognizer = try MangaPPLineRecognizer(
-            modelURL: url(MangaOCRModelSet.lineRecognizerFile),
-            dictionaryURL: url(MangaOCRModelSet.lineDictionaryFile)
-        )
-        identity = "\(Self.revision)-\(fingerprint)|\(Self.detectorMaxSide)"
     }
 
     private static var compiledDetectorRoot: URL? {
@@ -35,11 +58,11 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
             .appendingPathComponent("NiratanPDFOCRCoreML", isDirectory: true)
     }
 
-    /// Core ML detector programs for this model set and runtime; programs
-    /// for other models or runtimes are stale and removed.
-    private static func compiledDetectorDirectory(fingerprint: String) -> URL? {
+    /// Core ML detector programs for this detector model and runtime;
+    /// programs for other models or runtimes are stale and removed.
+    private static func compiledDetectorDirectory() -> URL? {
         guard let root = compiledDetectorRoot else { return nil }
-        let name = "\(fingerprint)-ort\(MangaOCRSession.runtimeVersion)"
+        let name = "\(MangaOCRModelSet.lineDetectorFile.sha256.prefix(12))-ort\(MangaOCRSession.runtimeVersion)"
         for stale in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         where stale.lastPathComponent != name {
             try? FileManager.default.removeItem(at: stale)
@@ -47,15 +70,20 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
         return root.appendingPathComponent(name, isDirectory: true)
     }
 
-    /// The loaded engine, or nil while the model set is not downloaded.
-    static func current(store: MangaOCRModelStore = .shared) async throws -> PDFPaddleOCREngine? {
-        guard await store.isReady(.pdfOCR) else { return nil }
-        return try loaded.withLock { engine in
+    /// The loaded engine reading with `model`, or nil while that model set
+    /// is not downloaded.
+    static func current(_ model: PDFLineOCRModel, store: MangaOCRModelStore = .shared) async throws -> PDFPaddleOCRReader? {
+        guard await store.isReady(model.modelSet) else { return nil }
+        let engine = try loaded.withLock { engine in
             if let engine { return engine }
             let created = try PDFPaddleOCREngine(store: store)
             engine = created
             return created
         }
+        return PDFPaddleOCRReader(
+            engine: engine, model: model,
+            identity: "\(revision)-\(store.fingerprint(for: model.modelSet))|\(detectorMaxSide)"
+        )
     }
 
     /// Release the ONNX sessions and their compiled Core ML programs, e.g.
@@ -65,8 +93,19 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
         if let root = compiledDetectorRoot { try? FileManager.default.removeItem(at: root) }
     }
 
-    func recognize(image: CGImage) throws -> [PDFOCRRecognizedLine] {
+    private func recognizer(for model: PDFLineOCRModel) throws -> MangaPPLineRecognizer {
+        if let recognizer = recognizers[model] { return recognizer }
+        let recognizer = try MangaPPLineRecognizer(
+            modelURL: store.url(for: model.recognizerFile),
+            dictionaryURL: store.url(for: MangaOCRModelSet.lineDictionaryFile)
+        )
+        recognizers[model] = recognizer
+        return recognizer
+    }
+
+    func recognize(image: CGImage, model: PDFLineOCRModel) throws -> [PDFOCRRecognizedLine] {
         try Task.checkCancellation()
+        let recognizer = try self.recognizer(for: model)
         guard let page = MangaOCRBitmap(image: image) else { throw PDFSupportError.geometry }
         let detected = try detector.detect(page, maxSide: Self.detectorMaxSide).map(\.rect)
         let lines = PDFPageOCRLayout.removeRuby(PDFPageOCRLayout.orient(detected))

@@ -62,7 +62,10 @@ private enum PDFDocumentTests {
         let item = try await store.importFile(file)
         let duplicate = try await store.importFile(file)
         precondition(item.id == duplicate.id && store.items.count == 1)
-        var saved = item; saved.pageIndex = 2; saved.zoomScale = 1.75
+        let unmarked = try String(contentsOf: store.directory.appendingPathComponent("pdf_library.json"), encoding: .utf8)
+        precondition(!unmarked.contains("manga") && !item.isManga && item.lineOCRModel == .document,
+                     "unmarked PDFs keep the pre-manga catalog shape")
+        var saved = item; saved.pageIndex = 2; saved.zoomScale = 1.75; saved.isManga = true
         let firstSession = UUID(), secondSession = UUID()
         store.claim(item.id, session: firstSession)
         try store.save(saved, session: firstSession)
@@ -72,6 +75,7 @@ private enum PDFDocumentTests {
         let reopened = PDFLibraryStore(directory: store.directory)
         precondition(reopened.items[0].pageIndex == 2)
         precondition(reopened.items[0].zoomScale == 1.75, "explicit zoom survives catalog round-trip")
+        precondition(reopened.items[0].isManga && reopened.items[0].lineOCRModel == .manga, "manga mark survives catalog round-trip")
         let resolved = try reopened.resolve(reopened.items[0])
         precondition(resolved.standardizedFileURL == file.standardizedFileURL)
         let sibling = root.appendingPathComponent("sibling", isDirectory: true)

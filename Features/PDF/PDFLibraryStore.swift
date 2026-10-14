@@ -103,7 +103,7 @@ final class PDFLibraryStore {
             // Reader saves cannot undo a concurrent source relink.
             $0.pageCount = item.pageCount; $0.pageIndex = item.pageIndex; $0.position = item.position
             $0.continuous = item.continuous; $0.fitWidth = item.fitWidth; $0.automaticOCR = item.automaticOCR
-            $0.zoomScale = item.zoomScale
+            $0.zoomScale = item.zoomScale; $0.manga = item.manga
             $0.lastOpened = item.lastOpened
         }
     }
