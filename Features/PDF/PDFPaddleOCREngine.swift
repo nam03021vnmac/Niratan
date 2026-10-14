@@ -6,7 +6,7 @@ import os
 /// (no speech-bubble stage), then CTC recognition per line with token
 /// positions. Vertical columns are re-laid out as upright glyph cells.
 actor PDFPaddleOCREngine: PDFLineRecognizing {
-    private static let revision = "pdf-ppocr-lines-v3"
+    private static let revision = "pdf-ppocr-lines-v4"
     /// Longer detector side in pixels. 8.5–10 pt text at 240 dpi detects as
     /// well here as at 2048, at about half the cost on A4.
     private static let detectorMaxSide = 1536
@@ -87,11 +87,30 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
                     let top = max(0, crop.y - extra), bottom = min(page.height, crop.y + crop.bitmap.height + extra)
                     bitmap = page.cropped(x: crop.x + part.lowerBound, y: top, width: part.count, height: bottom - top)
                 }
-                let tokens = try line.vertical ? recognizeColumn(bitmap) : recognizer.recognizeLineTokens(bitmap)
+                let glyphs = line.vertical ? bitmap : crop.bitmap.cropped(x: part.lowerBound, y: 0, width: part.count, height: crop.bitmap.height)
+                let ink = PDFOCRInk(glyphs).flatMap { mask in
+                    PDFPageOCRLayout.lineInk(width: glyphs.width, height: glyphs.height, vertical: line.vertical, isInk: mask.isInk)
+                        .map { (mask: mask, band: $0.band, along: $0.along) }
+                }
+                let tokens: [PDFOCRToken]
+                if line.vertical {
+                    guard let ink else { continue }
+                    tokens = try Self.recognizeColumn(bitmap, ink: ink.mask, band: ink.band, along: ink.along, recognizer: recognizer)
+                } else {
+                    tokens = Self.snapRow(try recognizer.recognizeLineTokens(bitmap), ink: ink.map { ($0.band, $0.along) })
+                }
                 guard !tokens.isEmpty else { continue }
+                // Across the line, the box is the ink band with a little air:
+                // the detector box is padded, unevenly when it caught ruby or
+                // a neighbour, which pulled highlights off the text's centre.
+                let thickness = line.vertical ? glyphs.width : glyphs.height
+                let across = ink.map {
+                    let pad = max(1, $0.band.count / 16)
+                    return max(0, $0.band.lowerBound - pad)..<min(thickness, $0.band.upperBound + pad)
+                } ?? 0..<thickness
                 let rect = line.vertical
-                    ? CGRect(x: crop.x, y: crop.y + part.lowerBound, width: bitmap.width, height: bitmap.height)
-                    : CGRect(x: crop.x + part.lowerBound, y: crop.y, width: part.count, height: crop.bitmap.height)
+                    ? CGRect(x: crop.x + across.lowerBound, y: crop.y + part.lowerBound, width: across.count, height: bitmap.height)
+                    : CGRect(x: crop.x + part.lowerBound, y: crop.y + across.lowerBound, width: part.count, height: across.count)
                 result.append(.init(line: .init(rect: rect, vertical: line.vertical), tokens: tokens))
             }
         }
@@ -116,24 +135,26 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
         return PDFPageOCRLayout.segments(profile: profile, minimumGap: Int((CGFloat(last - first + 1) * 1.8).rounded()))
     }
 
+    /// Place a horizontal line's tokens on the glyph cells of its ink.
+    private static func snapRow(_ tokens: [PDFOCRToken], ink: (band: Range<Int>, along: [Int])?) -> [PDFOCRToken] {
+        guard let ink else { return tokens }
+        let runs = PDFPageOCRLayout.segments(profile: ink.along, minimumGap: 1)
+        let (pitch, cells) = PDFPageOCRLayout.glyphCells(runs: runs, glyphWidth: CGFloat(ink.band.count), length: ink.along.count)
+        return PDFPageOCRLayout.snap(tokens, cells: cells, pitch: pitch, length: ink.along.count)
+    }
+
     /// Read a vertical column as a horizontal line of upright glyphs: cut it
     /// into em-box cells and lay them out left to right. Rotating the whole
     /// column instead turns every glyph sideways, and the recognizer then
     /// drops small kana, punctuation, brackets and ー. Token centres map back
     /// to their cell, so each character gets its exact em box.
-    private func recognizeColumn(_ column: MangaOCRBitmap) throws -> [PDFOCRToken] {
+    /// `band` is the column's ink across and `along` its ink per row.
+    private static func recognizeColumn(
+        _ column: MangaOCRBitmap, ink: PDFOCRInk, band: Range<Int>, along: [Int], recognizer: MangaPPLineRecognizer
+    ) throws -> [PDFOCRToken] {
         let width = column.width, height = column.height
-        guard let ink = PDFOCRInk(column) else { return [] }
-        var rowInk = [Int](repeating: 0, count: height)
-        var columnInk = [Int](repeating: 0, count: width)
-        for y in 0..<height {
-            for x in 0..<width where ink.isInk(x, y) {
-                rowInk[y] += 1; columnInk[x] += 1
-            }
-        }
-        guard let firstColumn = columnInk.firstIndex(where: { $0 > 0 }), let lastColumn = columnInk.lastIndex(where: { $0 > 0 }) else { return [] }
-        let runs = PDFPageOCRLayout.segments(profile: rowInk, minimumGap: 1)
-        let (pitch, cells) = PDFPageOCRLayout.verticalCells(runs: runs, glyphWidth: CGFloat(lastColumn - firstColumn + 1), length: height)
+        let runs = PDFPageOCRLayout.segments(profile: along, minimumGap: 1)
+        let (pitch, cells) = PDFPageOCRLayout.glyphCells(runs: runs, glyphWidth: CGFloat(band.count), length: height)
         guard !cells.isEmpty, pitch >= 4 else { return [] }
 
         let slot = max(width, Int(pitch.rounded()))
@@ -153,7 +174,7 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
         for (index, cell) in cells.enumerated() {
             var minX = width, maxX = -1, minY = cell.upperBound, maxY = cell.lowerBound - 1
             for y in cell {
-                for x in 0..<width where ink.isInk(x, y) {
+                for x in band where ink.isInk(x, y) {
                     minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
                 }
             }
@@ -187,8 +208,9 @@ actor PDFPaddleOCREngine: PDFLineRecognizing {
         for (cell, members) in zip(cells, perCell) where !members.isEmpty {
             let step = Double(cell.count) / Double(members.count)
             for (offset, token) in members.enumerated() {
-                let center = Double(cell.lowerBound) + step * (Double(offset) + 0.5)
-                result.append(PDFOCRToken(text: token.text, center: center / Double(height)))
+                let lower = (Double(cell.lowerBound) + step * Double(offset)) / Double(height)
+                let upper = (Double(cell.lowerBound) + step * Double(offset + 1)) / Double(height)
+                result.append(PDFOCRToken(text: token.text, center: (lower + upper) / 2, extent: lower...upper))
             }
         }
         return result

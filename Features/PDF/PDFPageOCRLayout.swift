@@ -1,10 +1,12 @@
 import CoreGraphics
 import Foundation
 
-/// One CTC token with its centre along the line, as a 0…1 fraction.
+/// One CTC token with its centre along the line, as a 0…1 fraction, and,
+/// once matched to a glyph found in the ink, that glyph's extent.
 nonisolated struct PDFOCRToken: Sendable, Equatable {
     var text: String
     var center: Double
+    var extent: ClosedRange<Double>? = nil
 }
 
 /// A detected text line in raster pixels (top-left origin).
@@ -114,7 +116,8 @@ nonisolated enum PDFPageOCRLayout {
             guard !tokens.isEmpty else { continue }
             let ranges = characterRanges(centers: tokens.map(\.center), length: line.length, thickness: line.thickness)
             var block = PDFTextBlock(text: "", vertical: line.vertical, spans: [])
-            for (token, range) in zip(tokens, ranges) {
+            for (token, estimate) in zip(tokens, ranges) {
+                let range = token.extent ?? estimate
                 let location = block.text.utf16.count
                 block.text += token.text
                 guard !token.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
@@ -185,12 +188,12 @@ nonisolated enum PDFPageOCRLayout {
         return runs
     }
 
-    /// Split a vertical column into em-box cells from its row ink runs
-    /// (`start..<end` in pixels, top to bottom). Full-size glyphs anchor the
+    /// Split a line into em-box cells from its ink runs along the line
+    /// (`start..<end` in pixels, in reading order). Full-size glyphs anchor the
     /// grid, so pitch error never accumulates along a long column; strokes of
     /// one glyph separated by blank rows (二, 宀) share a cell, and small kana
     /// and punctuation keep their own cell.
-    static func verticalCells(runs: [Range<Int>], glyphWidth: CGFloat, length: Int) -> (pitch: CGFloat, cells: [Range<Int>]) {
+    static func glyphCells(runs: [Range<Int>], glyphWidth: CGFloat, length: Int) -> (pitch: CGFloat, cells: [Range<Int>]) {
         guard !runs.isEmpty, glyphWidth > 0 else { return (glyphWidth, []) }
         let large = runs.filter { CGFloat($0.count) >= glyphWidth * 0.6 }
         let centers = large.map { CGFloat($0.lowerBound + $0.upperBound) / 2 }
@@ -223,5 +226,108 @@ nonisolated enum PDFPageOCRLayout {
             if upper > lower { result.append(lower..<upper) }
         }
         return (pitch, result)
+    }
+
+    /// Ink of a line crop. `band` is the main ink band across the line: the
+    /// padded detector box can clip ruby or a neighbouring line, and those
+    /// fragments carry far less ink. `along` counts ink inside the band.
+    static func lineInk(width: Int, height: Int, vertical: Bool, isInk: (Int, Int) -> Bool) -> (band: Range<Int>, along: [Int])? {
+        var across = [Int](repeating: 0, count: vertical ? width : height)
+        for y in 0..<height {
+            for x in 0..<width where isInk(x, y) { across[vertical ? x : y] += 1 }
+        }
+        guard let band = mainBand(across) else { return nil }
+        var along = [Int](repeating: 0, count: vertical ? height : width)
+        for y in 0..<height {
+            for x in 0..<width where band.contains(vertical ? x : y) && isInk(x, y) { along[vertical ? y : x] += 1 }
+        }
+        return (band, along)
+    }
+
+    /// The heaviest run of an across-the-line ink profile, joined with nearby
+    /// runs of comparable weight (the separate strokes of 二 or 三 in a short
+    /// line) but not with light fragments at the edge.
+    static func mainBand(_ across: [Int]) -> Range<Int>? {
+        let runs = segments(profile: across, minimumGap: max(2, across.count / 16))
+        func weight(_ run: Range<Int>) -> Int { across[run].reduce(0, +) }
+        guard let heaviest = runs.indices.max(by: { weight(runs[$0]) < weight(runs[$1]) }) else { return nil }
+        let minimum = Double(weight(runs[heaviest])) * 0.3
+        let reach = max(2, across.count / 6)
+        var lower = heaviest, upper = heaviest
+        while lower > 0, runs[lower].lowerBound - runs[lower - 1].upperBound <= reach,
+              Double(weight(runs[lower - 1])) >= minimum { lower -= 1 }
+        while upper + 1 < runs.count, runs[upper + 1].lowerBound - runs[upper].upperBound <= reach,
+              Double(weight(runs[upper + 1])) >= minimum { upper += 1 }
+        return runs[lower].lowerBound..<runs[upper].upperBound
+    }
+
+    /// Move recognised tokens onto the glyph cells found in the ink: each
+    /// token takes its cell's centre and extent, and tokens sharing a cell
+    /// (two half-width digits) split it evenly. CTC positions are only a
+    /// frame-accurate estimate that drifts along a line; the ink is exact.
+    /// Whitespace keeps its estimate. Tokens are returned unchanged when the
+    /// cells do not explain them.
+    static func snap(_ tokens: [PDFOCRToken], cells: [Range<Int>], pitch: CGFloat, length: Int) -> [PDFOCRToken] {
+        let glyphs = tokens.indices.filter { !tokens[$0].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !glyphs.isEmpty, !cells.isEmpty, length > 0, pitch > 0,
+              let assignment = align(glyphs.map { tokens[$0].center * Double(length) }, cells: cells, pitch: Double(pitch))
+        else { return tokens }
+        var result = tokens
+        var start = 0
+        while start < glyphs.count {
+            var end = start
+            while end + 1 < glyphs.count, assignment[end + 1] == assignment[start] { end += 1 }
+            let cell = cells[assignment[start]]
+            let step = Double(cell.count) / Double(end - start + 1)
+            for offset in 0...(end - start) {
+                let lower = (Double(cell.lowerBound) + step * Double(offset)) / Double(length)
+                let upper = (Double(cell.lowerBound) + step * Double(offset + 1)) / Double(length)
+                result[glyphs[start + offset]].center = (lower + upper) / 2
+                result[glyphs[start + offset]].extent = lower...upper
+            }
+            start = end + 1
+        }
+        return result
+    }
+
+    /// Order-preserving assignment of token centres (pixels) to cells that
+    /// minimises the distance from each centre to its cell, in pitches, plus
+    /// a cost for every cell left empty (specks, an unread glyph) and every
+    /// extra token sharing a cell. Nil when the centres sit on average more
+    /// than half a glyph from their cells.
+    static func align(_ centers: [Double], cells: [Range<Int>], pitch: Double) -> [Int]? {
+        let n = centers.count, m = cells.count
+        guard n > 0, m > 0, pitch > 0 else { return nil }
+        let skip = 0.6, share = 0.6
+        let middles = cells.map { Double($0.lowerBound + $0.upperBound) / 2 }
+        func distance(_ i: Int, _ j: Int) -> Double { Swift.abs(centers[i] - middles[j]) / pitch }
+        var cost = (0..<m).map { distance(0, $0) + skip * Double($0) }
+        var parent = [[Int]](repeating: [Int](repeating: -1, count: m), count: n)
+        for i in 1..<n {
+            var next = [Double](repeating: .infinity, count: m)
+            // Best earlier cell k < j, with the empty cells between charged.
+            var best = Double.infinity, bestCell = -1
+            for j in 0..<m {
+                if j > 0, cost[j - 1] - skip * Double(j - 1) < best {
+                    best = cost[j - 1] - skip * Double(j - 1); bestCell = j - 1
+                }
+                let fromEarlier = best + skip * Double(j - 1)
+                let fromSame = cost[j] + share
+                if fromSame <= fromEarlier {
+                    next[j] = fromSame + distance(i, j); parent[i][j] = j
+                } else {
+                    next[j] = fromEarlier + distance(i, j); parent[i][j] = bestCell
+                }
+            }
+            cost = next
+        }
+        guard var cell = (0..<m).min(by: { cost[$0] + skip * Double(m - 1 - $0) < cost[$1] + skip * Double(m - 1 - $1) }) else { return nil }
+        var assignment = [Int](repeating: 0, count: n)
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            assignment[i] = cell
+            if i > 0 { cell = parent[i][cell] }
+        }
+        let offset = (0..<n).reduce(0) { $0 + distance($1, assignment[$1]) } / Double(n)
+        return offset <= 0.5 ? assignment : nil
     }
 }

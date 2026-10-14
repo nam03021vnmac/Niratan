@@ -1,6 +1,7 @@
 // test-sources: Models/PDF.swift Features/PDF/PDFPageOCRLayout.swift
 import Foundation
 import CoreGraphics
+import CoreText
 
 @main
 private enum PDFPageOCRLayoutTests {
@@ -85,14 +86,69 @@ private enum PDFPageOCRLayoutTests {
         // Vertical cells on a 40 px pitch: 二's two strokes share a cell, small
         // っ and 。 keep their own, and cells never overlap.
         let runs = [2..<38, 42..<78, 84..<92, 108..<116, 124..<136, 164..<172]
-        let (pitch, cells) = PDFPageOCRLayout.verticalCells(runs: runs, glyphWidth: 36, length: 200)
+        let (pitch, cells) = PDFPageOCRLayout.glyphCells(runs: runs, glyphWidth: 36, length: 200)
         precondition(abs(pitch - 40) < 0.5, "pitch from neighbouring full glyphs: \(pitch)")
         precondition(cells.count == 5, "\(cells)")
         precondition(cells[2].contains(88) && cells[2].contains(112), "both strokes of one glyph share a cell")
         precondition(cells[3].contains(130) && cells[4].contains(168), "small kana and punctuation keep their own cells")
         precondition(zip(cells, cells.dropFirst()).allSatisfy { $0.upperBound <= $1.lowerBound })
         precondition(cells.allSatisfy { $0.lowerBound >= 0 && $0.upperBound <= 200 })
-        precondition(PDFPageOCRLayout.verticalCells(runs: [], glyphWidth: 10, length: 50).cells.isEmpty)
+        precondition(PDFPageOCRLayout.glyphCells(runs: [], glyphWidth: 10, length: 50).cells.isEmpty)
+
+        // Ink band across a line: ruby fragments clipped by the padded box
+        // are dropped, the separate strokes of 二 stay together.
+        precondition(PDFPageOCRLayout.mainBand([0, 2, 2, 0, 0, 0, 0, 30, 40, 40, 30, 0, 0]) == 7..<11, "a light ruby fragment is not the band")
+        precondition(PDFPageOCRLayout.mainBand([0, 0, 20, 20, 0, 0, 0, 0, 0, 20, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) == 2..<11,
+                     "comparable strokes form one band")
+        precondition(PDFPageOCRLayout.mainBand([0, 0, 0]) == nil)
+
+        // Snapping: one token per cell pairs them even when CTC drifts by a
+        // third of a glyph; shared cells split evenly; whitespace is untouched.
+        let glyphRow = [0..<40, 40..<80, 80..<120, 120..<160]
+        let drifted = [0.13, 0.38, 0.62, 0.87].map { PDFOCRToken(text: "字", center: $0 + 13.0 / 160) }
+        let snapped = PDFPageOCRLayout.snap(drifted, cells: glyphRow, pitch: 40, length: 160)
+        precondition(snapped.map(\.extent) == [0...0.25, 0.25...0.5, 0.5...0.75, 0.75...1], "\(snapped)")
+        precondition(near(CGFloat(snapped[1].center), 0.375, 1e-9))
+        let digits = [PDFOCRToken(text: "2", center: 0.08), PDFOCRToken(text: "0", center: 0.18), PDFOCRToken(text: " ", center: 0.3),
+                      PDFOCRToken(text: "年", center: 0.4), PDFOCRToken(text: "目", center: 0.62)]
+        let shared = PDFPageOCRLayout.snap(digits, cells: [0..<40, 40..<80, 80..<120, 150..<152], pitch: 40, length: 160)
+        precondition(shared[0].extent == 0...0.125 && shared[1].extent == 0.125...0.25, "two half-width digits share a cell: \(shared)")
+        precondition(shared[2] == digits[2], "whitespace keeps its estimate")
+        precondition(shared[3].extent == 0.25...0.5 && shared[4].extent == 0.5...0.75, "a speck cell stays empty: \(shared)")
+        let unrelated = [PDFOCRToken(text: "字", center: 0.1), PDFOCRToken(text: "字", center: 0.9)]
+        precondition(PDFPageOCRLayout.snap(unrelated, cells: [60..<70, 72..<80], pitch: 40, length: 160) == unrelated,
+                     "cells that do not explain the tokens are ignored")
+
+        // Snapped extents become the span rectangles, not centre midpoints.
+        let exact = PDFOCRRecognizedLine(
+            line: .init(rect: CGRect(x: 40, y: 100, width: 200, height: 40), vertical: false),
+            tokens: [PDFOCRToken(text: "日", center: 0.2, extent: 0.1...0.3), PDFOCRToken(text: "本", center: 0.5, extent: 0.4...0.6)])
+        let exactSpans = PDFPageOCRLayout.blocks([exact], pixels: pixels, transform: transform, crop: crop)[0].spans
+        precondition(near(exactSpans[0].rect.minX, 30) && near(exactSpans[0].rect.width, 20) && near(exactSpans[1].rect.minX, 60), "\(exactSpans)")
+
+        // Rendered text: CTC-like centres that drift and jitter snap onto
+        // every glyph's own box (its em cell, so 、 and 。 keep theirs),
+        // horizontally and vertically.
+        let sample = "日本語の、テキストです。2024年"
+        for vertical in [false, true] {
+            let (mask, width, height, truth) = render(sample, vertical: vertical)
+            guard let ink = PDFPageOCRLayout.lineInk(width: width, height: height, vertical: vertical, isInk: { mask[$1 * width + $0] }) else {
+                preconditionFailure("rendered line has ink")
+            }
+            let runs = PDFPageOCRLayout.segments(profile: ink.along, minimumGap: 1)
+            let (pitch, cells) = PDFPageOCRLayout.glyphCells(runs: runs, glyphWidth: CGFloat(ink.band.count), length: ink.along.count)
+            let length = Double(ink.along.count)
+            let estimates = truth.enumerated().map { index, center in
+                PDFOCRToken(text: "x", center: (center + Double(pitch) * (0.15 + (index % 3 == 0 ? 0.08 : -0.08))) / length)
+            }
+            let placed = PDFPageOCRLayout.snap(estimates, cells: cells, pitch: pitch, length: Int(length))
+            for (token, center) in zip(placed, truth) {
+                guard let extent = token.extent else { preconditionFailure("vertical \(vertical): token not snapped") }
+                precondition(extent.contains(center / length), "vertical \(vertical): glyph at \(center) outside \(extent.lowerBound * length)…\(extent.upperBound * length)")
+                precondition((extent.upperBound - extent.lowerBound) * length <= Double(pitch) * 1.15, "vertical \(vertical): box wider than a glyph")
+            }
+            precondition(ink.band.count > 20 && ink.band.count < 52, "band hugs the glyphs: \(ink.band)")
+        }
 
         // Reading order: left column before right column, top to bottom inside each.
         func block(_ text: String, x: CGFloat, y: CGFloat, vertical: Bool = false) -> PDFTextBlock {
@@ -108,5 +164,53 @@ private enum PDFPageOCRLayoutTests {
         precondition(PDFTextGeometry.joinWrappedLines([upper, lower]).count == 2, "native text keeps the strict gap")
         precondition(PDFTextGeometry.joinWrappedLines([upper, lower], maxGap: 1.6).count == 1)
         print("PDF page OCR layout tests passed")
+    }
+
+    /// Render `text` in Hiragino Mincho at 40 px on a padded canvas. Returns
+    /// the ink mask and each grapheme's ink centre along the line (digits
+    /// and kana are proportional, so the truth comes from glyph bounds).
+    static func render(_ text: String, vertical: Bool) -> (mask: [Bool], width: Int, height: Int, centers: [Double]) {
+        let font = CTFontCreateWithName("HiraMinProN-W3" as CFString, 40, nil)
+        let size = 40.0, pad = 18.0
+        let graphemes = text.map(String.init)
+        // Horizontal: glyphs laid out by CoreText advances. Vertical: one
+        // glyph per em cell, centred, which is how vertical type sets.
+        var advances: [Double] = []
+        for grapheme in graphemes {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: grapheme, attributes: [kCTFontAttributeName as NSAttributedString.Key: font]))
+            advances.append(vertical ? size : CTLineGetTypographicBounds(line, nil, nil, nil))
+        }
+        let length = Int(advances.reduce(0, +) + pad * 2), thickness = Int(size + pad * 2)
+        let width = vertical ? thickness : length, height = vertical ? length : thickness
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+                                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+        context.setFillColor(gray: 1, alpha: 1); context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(gray: 0, alpha: 1)
+        var position = pad
+        var centers: [Double] = []
+        for (grapheme, advance) in zip(graphemes, advances) {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: grapheme, attributes: [kCTFontAttributeName as NSAttributedString.Key: font]))
+            context.textPosition = .zero
+            let bounds = CTLineGetImageBounds(line, context)
+            // Context y grows upwards; the mask rows grow downwards.
+            let baseline = pad + size * 0.12
+            if vertical {
+                let x = pad + (size - bounds.width) / 2 - bounds.minX
+                let yUp = Double(height) - position - size / 2 - bounds.height / 2 - bounds.minY
+                context.textPosition = CGPoint(x: x, y: yUp)
+                CTLineDraw(line, context)
+                let top = Double(height) - (yUp + bounds.maxY), bottom = Double(height) - (yUp + bounds.minY)
+                centers.append((top + bottom) / 2)
+            } else {
+                context.textPosition = CGPoint(x: position, y: baseline)
+                CTLineDraw(line, context)
+                centers.append(position + bounds.midX)
+            }
+            position += advance
+        }
+        let data = context.data!.assumingMemoryBound(to: UInt8.self)
+        // Bitmap memory starts at the top row.
+        let mask = (0..<(width * height)).map { data[$0] < 128 }
+        return (mask, width, height, centers)
     }
 }
