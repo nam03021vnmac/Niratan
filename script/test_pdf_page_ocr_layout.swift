@@ -150,6 +150,63 @@ private enum PDFPageOCRLayoutTests {
             precondition(ink.band.count > 20 && ink.band.count < 52, "band hugs the glyphs: \(ink.band)")
         }
 
+        // A bubble outline crossing a column adds an even floor of ink across
+        // it: the cleaned band ignores it, the reading's band keeps HEAD's.
+        let outlined = mask(width: 60, height: 120) { x, y in
+            (20..<40).contains(x) && (y % 40) >= 8 && (y % 40) < 36 || (2..<5).contains(y)
+        }
+        let cleanBand = PDFPageOCRLayout.lineInk(width: 60, height: 120, vertical: true, isInk: outlined)?.band
+        precondition(cleanBand == 20..<40, "outline floor ignored: \(String(describing: cleanBand))")
+        precondition(PDFPageOCRLayout.lineInk(width: 60, height: 120, vertical: true, isInk: outlined, cleaned: false)?.band == 0..<60)
+        let stray = PDFPageOCRLayout.strayInk(band: 20..<40, width: 60, height: 120, vertical: true, isInk: outlined)
+        precondition(stray[3 * 60 + 2] && stray[3 * 60 + 30] && !stray[20 * 60 + 30], "the outline is stray, the glyphs are not")
+
+        // Two touching glyphs form one run: geometry gives each its own cell,
+        // the reading keeps its original cells.
+        let touching = [0..<90, 100..<140, 150..<190, 200..<240]
+        let separated = PDFPageOCRLayout.glyphCells(runs: touching, glyphWidth: 40, length: 240, separateLongRuns: true).cells
+        precondition(separated.count == 5 && separated[0].contains(22) && separated[1].contains(67), "\(separated)")
+        precondition(PDFPageOCRLayout.glyphCells(runs: touching, glyphWidth: 40, length: 240).cells.count == 4)
+
+        // Neighbouring lines of the same orientation that reach this one.
+        let column = PDFOCRLine(rect: CGRect(x: 100, y: 0, width: 40, height: 300), vertical: true)
+        let found = PDFPageOCRLayout.neighbours(of: column, among: [
+            column,
+            PDFOCRLine(rect: CGRect(x: 130, y: 50, width: 40, height: 200), vertical: true),
+            PDFOCRLine(rect: CGRect(x: 300, y: 0, width: 40, height: 300), vertical: true),
+            PDFOCRLine(rect: CGRect(x: 60, y: 400, width: 40, height: 100), vertical: true),
+            PDFOCRLine(rect: CGRect(x: 90, y: 100, width: 200, height: 30), vertical: false),
+        ], along: 0..<300)
+        precondition(found.count == 1 && found[0].centre == 150 && found[0].thickness == 40, "\(found)")
+
+        // Rendered column in a bubble: an outline crosses its first glyph and
+        // a tail of circles sits beside its last ones. Boxes from sloppy
+        // reading positions still centre on each glyph.
+        let bubble = render("武器工房の者たち", vertical: true) { context, width, height in
+            context.setLineWidth(3)
+            context.move(to: CGPoint(x: 0, y: height - 30)); context.addLine(to: CGPoint(x: width, y: height - 4)); context.strokePath()
+            for index in 0..<3 { context.fillEllipse(in: CGRect(x: 62, y: 40 + index * 40, width: 26, height: 18)) }
+        }
+        let isBubbleInk = { (x: Int, y: Int) in bubble.mask[y * bubble.width + x] }
+        guard let bubbleInk = PDFPageOCRLayout.lineInk(width: bubble.width, height: bubble.height, vertical: true, isInk: isBubbleInk) else {
+            preconditionFailure("rendered column has ink")
+        }
+        let count = bubble.centers.count
+        let sloppy = bubble.centers.indices.map { index -> PDFOCRToken in
+            let step = Double(bubble.height) / Double(count)
+            let lower = (Double(index) * step + step * 0.2) / Double(bubble.height), upper = lower + step / Double(bubble.height)
+            return PDFOCRToken(text: "字", center: (lower + upper) / 2, extent: lower...min(1, upper))
+        }
+        let (boxes, extent) = PDFPageOCRLayout.place(sloppy, ink: (bubbleInk.band, bubbleInk.across), width: bubble.width, height: bubble.height,
+                                                     vertical: true, glyph: 40, isInk: isBubbleInk)
+        for (box, centre) in zip(boxes, bubble.centers) {
+            guard let along = box.extent, let across = box.across else { preconditionFailure("box placed") }
+            let middle = (along.lowerBound + along.upperBound) / 2 * Double(bubble.height)
+            precondition(abs(middle - centre) < 6, "box centred along the glyph: \(middle) vs \(centre)")
+            let side = Double(extent.lowerBound) + (across.lowerBound + across.upperBound) / 2 * Double(extent.count)
+            precondition(abs(side - 38) < 4, "box centred across the column, not on the tail: \(side)")
+        }
+
         // Reading order: left column before right column, top to bottom inside each.
         func block(_ text: String, x: CGFloat, y: CGFloat, vertical: Bool = false) -> PDFTextBlock {
             PDFTextBlock(text: text, vertical: vertical, spans: [.init(location: 0, length: 1, rect: CGRect(x: x, y: y, width: 100, height: 10))])
@@ -169,7 +226,13 @@ private enum PDFPageOCRLayoutTests {
     /// Render `text` in Hiragino Mincho at 40 px on a padded canvas. Returns
     /// the ink mask and each grapheme's ink centre along the line (digits
     /// and kana are proportional, so the truth comes from glyph bounds).
-    static func render(_ text: String, vertical: Bool) -> (mask: [Bool], width: Int, height: Int, centers: [Double]) {
+    static func mask(width: Int, height: Int, _ ink: (Int, Int) -> Bool) -> (Int, Int) -> Bool {
+        let pixels = (0..<(width * height)).map { ink($0 % width, $0 / width) }
+        return { x, y in pixels[y * width + x] }
+    }
+
+    static func render(_ text: String, vertical: Bool,
+                       decorate: ((CGContext, Int, Int) -> Void)? = nil) -> (mask: [Bool], width: Int, height: Int, centers: [Double]) {
         let font = CTFontCreateWithName("HiraMinProN-W3" as CFString, 40, nil)
         let size = 40.0, pad = 18.0
         let graphemes = text.map(String.init)
@@ -208,6 +271,7 @@ private enum PDFPageOCRLayoutTests {
             }
             position += advance
         }
+        decorate?(context, width, height)
         let data = context.data!.assumingMemoryBound(to: UInt8.self)
         // Bitmap memory starts at the top row.
         let mask = (0..<(width * height)).map { data[$0] < 128 }

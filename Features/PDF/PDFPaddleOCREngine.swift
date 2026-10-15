@@ -35,7 +35,7 @@ nonisolated struct PDFPaddleOCRReader: PDFLineRecognizing {
 /// One detector serves both recognizers: its Core ML programs are large and
 /// not safe to share between concurrent callers.
 actor PDFPaddleOCREngine {
-    private static let revision = "pdf-ppocr-lines-v4"
+    private static let revision = "pdf-ppocr-lines-v5"
     /// Longer detector side in pixels. 8.5–10 pt text at 240 dpi detects as
     /// well here as at 2048, at about half the cost on A4.
     private static let detectorMaxSide = 1536
@@ -108,8 +108,12 @@ actor PDFPaddleOCREngine {
         let recognizer = try self.recognizer(for: model)
         guard let page = MangaOCRBitmap(image: image) else { throw PDFSupportError.geometry }
         let detected = try detector.detect(page, maxSide: Self.detectorMaxSide).map(\.rect)
-        let lines = PDFPageOCRLayout.removeRuby(PDFPageOCRLayout.orient(detected))
-        var result: [PDFOCRRecognizedLine] = []
+        let oriented = PDFPageOCRLayout.orient(detected)
+        let lines = PDFPageOCRLayout.removeRuby(oriented)
+        // Read every line first: where a line's glyphs sit is judged against
+        // the glyph size of the whole page.
+        var read: [(line: PDFOCRLine, crop: (x: Int, y: Int), part: Range<Int>, tokens: [PDFOCRToken],
+                    text: PDFOCRInk?, size: (width: Int, height: Int))] = []
         for line in lines {
             let box = line.rect.ocrClamped(width: CGFloat(page.width), height: CGFloat(page.height))
             guard box.width >= 1, box.height >= 1, let crop = page.blockCrop(box) else { continue }
@@ -127,31 +131,59 @@ actor PDFPaddleOCREngine {
                     bitmap = page.cropped(x: crop.x + part.lowerBound, y: top, width: part.count, height: bottom - top)
                 }
                 let glyphs = line.vertical ? bitmap : crop.bitmap.cropped(x: part.lowerBound, y: 0, width: part.count, height: crop.bitmap.height)
-                let ink = PDFOCRInk(glyphs).flatMap { mask in
-                    PDFPageOCRLayout.lineInk(width: glyphs.width, height: glyphs.height, vertical: line.vertical, isInk: mask.isInk)
-                        .map { (mask: mask, band: $0.band, along: $0.along) }
-                }
+                let mask = PDFOCRInk(glyphs)
                 let tokens: [PDFOCRToken]
                 if line.vertical {
-                    guard let ink else { continue }
-                    tokens = try Self.recognizeColumn(bitmap, ink: ink.mask, band: ink.band, along: ink.along, recognizer: recognizer)
+                    guard let mask, let reading = PDFPageOCRLayout.lineInk(width: glyphs.width, height: glyphs.height, vertical: true,
+                                                                           isInk: mask.isInk, cleaned: false) else { continue }
+                    tokens = try Self.recognizeColumn(bitmap, ink: mask, band: reading.band, along: reading.along, recognizer: recognizer)
                 } else {
-                    tokens = Self.snapRow(try recognizer.recognizeLineTokens(bitmap), ink: ink.map { ($0.band, $0.along) })
+                    tokens = try recognizer.recognizeLineTokens(bitmap)
                 }
                 guard !tokens.isEmpty else { continue }
-                // Across the line, the box is the ink band with a little air:
-                // the detector box is padded, unevenly when it caught ruby or
-                // a neighbour, which pulled highlights off the text's centre.
-                let thickness = line.vertical ? glyphs.width : glyphs.height
-                let across = ink.map {
-                    let pad = max(1, $0.band.count / 16)
-                    return max(0, $0.band.lowerBound - pad)..<min(thickness, $0.band.upperBound + pad)
-                } ?? 0..<thickness
-                let rect = line.vertical
-                    ? CGRect(x: crop.x + across.lowerBound, y: crop.y + part.lowerBound, width: across.count, height: bitmap.height)
-                    : CGRect(x: crop.x + part.lowerBound, y: crop.y + across.lowerBound, width: part.count, height: across.count)
-                result.append(.init(line: .init(rect: rect, vertical: line.vertical), tokens: tokens))
+                // Boxes come from the ink alone. Ink nearer another line's
+                // centre (the next column, ruby), relative to each line's
+                // thickness, is that line's, even inside this line's padded box.
+                let origin = CGFloat(line.vertical ? crop.x : crop.y)
+                let start = CGFloat((line.vertical ? crop.y : crop.x) + part.lowerBound)
+                let own = (line.vertical ? line.rect.midX : line.rect.midY) - origin
+                let neighbours = PDFPageOCRLayout.neighbours(of: line, among: oriented, along: start..<(start + CGFloat(part.count)))
+                let text = neighbours.isEmpty ? mask : mask?.filter { x, y in
+                    let position = CGFloat(line.vertical ? x : y) + 0.5
+                    return neighbours.allSatisfy {
+                        Swift.abs(position - own) / line.thickness <= Swift.abs(position - ($0.centre - origin)) / $0.thickness
+                    }
+                }
+                read.append((line, (crop.x, crop.y), part, tokens, text, (glyphs.width, glyphs.height)))
             }
+        }
+        let inks = read.map { entry in
+            entry.text.flatMap { PDFPageOCRLayout.lineInk(width: entry.size.width, height: entry.size.height, vertical: entry.line.vertical,
+                                                          isInk: $0.isInk) }
+        }
+        // The detector box is centred on its text and scales with it, so the
+        // page's typical band-to-box ratio predicts each line's glyph size.
+        func ratio(vertical: Bool) -> Double? {
+            let ratios = zip(read, inks).compactMap { entry, ink in
+                entry.line.vertical == vertical ? ink.map { Double($0.band.count) / Double(entry.line.thickness) } : nil
+            }.sorted()
+            return ratios.count >= 3 ? ratios[ratios.count / 2] : nil
+        }
+        let ratios = (vertical: ratio(vertical: true), horizontal: ratio(vertical: false))
+        var result: [PDFOCRRecognizedLine] = []
+        for (entry, ink) in zip(read, inks) {
+            let line = entry.line, part = entry.part
+            var tokens = entry.tokens
+            var across = 0..<(line.vertical ? entry.size.width : entry.size.height)
+            if let text = entry.text, let ink {
+                let expected = (line.vertical ? ratios.vertical : ratios.horizontal).map { Int(($0 * Double(line.thickness)).rounded()) }
+                (tokens, across) = PDFPageOCRLayout.place(tokens, ink: (ink.band, ink.across), width: entry.size.width, height: entry.size.height,
+                                                          vertical: line.vertical, glyph: expected, isInk: text.isInk)
+            }
+            let rect = line.vertical
+                ? CGRect(x: entry.crop.x + across.lowerBound, y: entry.crop.y + part.lowerBound, width: across.count, height: part.count)
+                : CGRect(x: entry.crop.x + part.lowerBound, y: entry.crop.y + across.lowerBound, width: part.count, height: across.count)
+            result.append(.init(line: .init(rect: rect, vertical: line.vertical), tokens: tokens))
         }
         return result
     }
@@ -172,14 +204,6 @@ actor PDFPaddleOCREngine {
         }
         guard let first = across.firstIndex(where: { $0 > 0 }), let last = across.lastIndex(where: { $0 > 0 }) else { return [] }
         return PDFPageOCRLayout.segments(profile: profile, minimumGap: Int((CGFloat(last - first + 1) * 1.8).rounded()))
-    }
-
-    /// Place a horizontal line's tokens on the glyph cells of its ink.
-    private static func snapRow(_ tokens: [PDFOCRToken], ink: (band: Range<Int>, along: [Int])?) -> [PDFOCRToken] {
-        guard let ink else { return tokens }
-        let runs = PDFPageOCRLayout.segments(profile: ink.along, minimumGap: 1)
-        let (pitch, cells) = PDFPageOCRLayout.glyphCells(runs: runs, glyphWidth: CGFloat(ink.band.count), length: ink.along.count)
-        return PDFPageOCRLayout.snap(tokens, cells: cells, pitch: pitch, length: ink.along.count)
     }
 
     /// Read a vertical column as a horizontal line of upright glyphs: cut it
@@ -260,7 +284,7 @@ actor PDFPaddleOCREngine {
 /// and lightest luminance, plus the mean paper colour.
 nonisolated struct PDFOCRInk {
     let width: Int
-    private let mask: [Bool]
+    private var mask: [Bool]
     let paper: (UInt8, UInt8, UInt8)
 
     init?(_ bitmap: MangaOCRBitmap) {
@@ -296,4 +320,11 @@ nonisolated struct PDFOCRInk {
     }
 
     func isInk(_ x: Int, _ y: Int) -> Bool { mask[y * width + x] }
+
+    /// The same mask without the ink pixels `keep` rejects.
+    func filter(_ keep: (Int, Int) -> Bool) -> PDFOCRInk {
+        var copy = self
+        for index in mask.indices where mask[index] && !keep(index % width, index / width) { copy.mask[index] = false }
+        return copy
+    }
 }

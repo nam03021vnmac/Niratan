@@ -2,11 +2,13 @@ import CoreGraphics
 import Foundation
 
 /// One CTC token with its centre along the line, as a 0…1 fraction, and,
-/// once matched to a glyph found in the ink, that glyph's extent.
+/// once matched to a glyph found in the ink, that glyph's extent along the
+/// line and, as a fraction of the line's thickness, across it.
 nonisolated struct PDFOCRToken: Sendable, Equatable {
     var text: String
     var center: Double
     var extent: ClosedRange<Double>? = nil
+    var across: ClosedRange<Double>? = nil
 }
 
 /// A detected text line in raster pixels (top-left origin).
@@ -80,6 +82,22 @@ nonisolated enum PDFPageOCRLayout {
         }.map(\.element)
     }
 
+    /// Centres across the line (page pixels) and thicknesses of the other
+    /// lines of the same orientation that run alongside `line` within
+    /// `along` and whose padded boxes reach it: the next column or row, or
+    /// its ruby.
+    static func neighbours(of line: PDFOCRLine, among lines: [PDFOCRLine], along: Range<CGFloat>) -> [(centre: CGFloat, thickness: CGFloat)] {
+        let centre = line.vertical ? line.rect.midX : line.rect.midY
+        return lines.compactMap { other in
+            guard other != line, other.vertical == line.vertical else { return nil }
+            let lower = line.vertical ? other.rect.minY : other.rect.minX, upper = line.vertical ? other.rect.maxY : other.rect.maxX
+            let middle = line.vertical ? other.rect.midX : other.rect.midY
+            guard lower < along.upperBound, upper > along.lowerBound,
+                  Swift.abs(middle - centre) < (line.thickness + other.thickness) / 2, middle != centre else { return nil }
+            return (middle, other.thickness)
+        }
+    }
+
     /// Fractions `[start, end]` along the line for each token. Boundaries are
     /// midpoints between neighbouring token centres; the outer edges mirror
     /// the neighbouring gap. A glyph never extends further than `thickness`
@@ -121,13 +139,16 @@ nonisolated enum PDFPageOCRLayout {
                 let location = block.text.utf16.count
                 block.text += token.text
                 guard !token.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                let across = token.across ?? 0...1
                 let raster: CGRect
                 if line.vertical {
-                    raster = CGRect(x: line.rect.minX, y: line.rect.minY + range.lowerBound * line.rect.height,
-                                    width: line.rect.width, height: (range.upperBound - range.lowerBound) * line.rect.height)
+                    raster = CGRect(x: line.rect.minX + across.lowerBound * line.rect.width, y: line.rect.minY + range.lowerBound * line.rect.height,
+                                    width: (across.upperBound - across.lowerBound) * line.rect.width,
+                                    height: (range.upperBound - range.lowerBound) * line.rect.height)
                 } else {
-                    raster = CGRect(x: line.rect.minX + range.lowerBound * line.rect.width, y: line.rect.minY,
-                                    width: (range.upperBound - range.lowerBound) * line.rect.width, height: line.rect.height)
+                    raster = CGRect(x: line.rect.minX + range.lowerBound * line.rect.width, y: line.rect.minY + across.lowerBound * line.rect.height,
+                                    width: (range.upperBound - range.lowerBound) * line.rect.width,
+                                    height: (across.upperBound - across.lowerBound) * line.rect.height)
                 }
                 // Raster rows grow downwards; `pageRect` expects bottom-left.
                 let normalized = CGRect(x: raster.minX / pixels.width, y: 1 - raster.maxY / pixels.height,
@@ -192,28 +213,43 @@ nonisolated enum PDFPageOCRLayout {
     /// (`start..<end` in pixels, in reading order). Full-size glyphs anchor the
     /// grid, so pitch error never accumulates along a long column; strokes of
     /// one glyph separated by blank rows (二, 宀) share a cell, and small kana
-    /// and punctuation keep their own cell.
-    static func glyphCells(runs: [Range<Int>], glyphWidth: CGFloat, length: Int) -> (pitch: CGFloat, cells: [Range<Int>]) {
+    /// and punctuation keep their own cell. With `separateLongRuns`, a run
+    /// much longer than a glyph (touching glyphs, or a glyph joined to a
+    /// bubble outline) never anchors the grid and fills the grid cells it
+    /// really covers; the reading keeps the original cells it was tuned on.
+    static func glyphCells(runs: [Range<Int>], glyphWidth: CGFloat, length: Int,
+                           separateLongRuns: Bool = false) -> (pitch: CGFloat, cells: [Range<Int>]) {
         guard !runs.isEmpty, glyphWidth > 0 else { return (glyphWidth, []) }
-        let large = runs.filter { CGFloat($0.count) >= glyphWidth * 0.6 }
+        let large = runs.filter { CGFloat($0.count) >= glyphWidth * 0.6 && (!separateLongRuns || CGFloat($0.count) <= glyphWidth * 1.3) }
         let centers = large.map { CGFloat($0.lowerBound + $0.upperBound) / 2 }
         let steps = zip(centers, centers.dropFirst()).map { $1 - $0 }.filter { $0 >= glyphWidth * 0.8 && $0 <= glyphWidth * 1.6 }.sorted()
         let pitch = steps.isEmpty ? glyphWidth * 1.05 : steps[steps.count / 2]
         var cells: [(start: CGFloat, range: Range<Int>)] = []
-        for run in runs {
-            let center = CGFloat(run.lowerBound + run.upperBound) / 2
-            let anchor = centers.min { Swift.abs($0 - center) < Swift.abs($1 - center) }
-            let start: CGFloat
-            if let anchor {
-                let origin = anchor - pitch / 2
-                start = origin + floor((center - origin) / pitch) * pitch
-            } else {
-                start = CGFloat(run.lowerBound) - (pitch - CGFloat(run.count)) / 2
-            }
+        func add(_ start: CGFloat, _ run: Range<Int>) {
             if let last = cells.last, Swift.abs(last.start - start) < pitch * 0.3 {
                 cells[cells.count - 1].range = last.range.lowerBound..<max(last.range.upperBound, run.upperBound)
             } else {
                 cells.append((start, run))
+            }
+        }
+        for run in runs {
+            let center = CGFloat(run.lowerBound + run.upperBound) / 2
+            let anchor = centers.min { Swift.abs($0 - center) < Swift.abs($1 - center) }
+            if separateLongRuns, CGFloat(run.count) > pitch * 1.3 {
+                let origin = anchor.map { $0 - pitch / 2 } ?? CGFloat(run.lowerBound)
+                var slot = origin + floor((CGFloat(run.lowerBound) - origin) / pitch) * pitch
+                while slot < CGFloat(run.upperBound) {
+                    let lower = max(run.lowerBound, Int(slot.rounded())), upper = min(run.upperBound, Int((slot + pitch).rounded()))
+                    if CGFloat(upper - lower) >= pitch * 0.35 { add(slot, lower..<upper) }
+                    slot += pitch
+                }
+                continue
+            }
+            if let anchor {
+                let origin = anchor - pitch / 2
+                add(origin + floor((center - origin) / pitch) * pitch, run)
+            } else {
+                add(CGFloat(run.lowerBound) - (pitch - CGFloat(run.count)) / 2, run)
             }
         }
         // Each cell spans its em box, clipped so neighbours never overlap.
@@ -231,17 +267,105 @@ nonisolated enum PDFPageOCRLayout {
     /// Ink of a line crop. `band` is the main ink band across the line: the
     /// padded detector box can clip ruby or a neighbouring line, and those
     /// fragments carry far less ink. `along` counts ink inside the band.
-    static func lineInk(width: Int, height: Int, vertical: Bool, isInk: (Int, Int) -> Bool) -> (band: Range<Int>, along: [Int])? {
+    /// `cleaned` ignores the thin, even floor of ink that a bubble outline or
+    /// frame crossing the line adds at every position across it; the reading
+    /// keeps the band it was tuned on.
+    static func lineInk(width: Int, height: Int, vertical: Bool, isInk: (Int, Int) -> Bool,
+                        cleaned: Bool = true) -> (band: Range<Int>, along: [Int], across: [Int])? {
         var across = [Int](repeating: 0, count: vertical ? width : height)
         for y in 0..<height {
             for x in 0..<width where isInk(x, y) { across[vertical ? x : y] += 1 }
         }
+        if cleaned {
+            // The floor shows at the edges of the padded crop as uniformly
+            // faint ink; clean crops, and glyphs that reach the edge, have none.
+            let edge = max(2, across.count / 10), peak = across.max() ?? 0
+            func floor(_ zone: ArraySlice<Int>) -> Int {
+                guard let low = zone.min(), let high = zone.max(), Double(high) <= Double(peak) * 0.15 else { return 0 }
+                return low
+            }
+            let floor = across.count > edge * 2 ? max(floor(across.prefix(edge)), floor(across.suffix(edge))) : 0
+            across = across.map { $0 > floor ? $0 : 0 }
+        }
         guard let band = mainBand(across) else { return nil }
+        return (band, alongInk(band: band, width: width, height: height, vertical: vertical, isInk: isInk), across)
+    }
+
+    /// Ink along the line inside `band`.
+    static func alongInk(band: Range<Int>, width: Int, height: Int, vertical: Bool, isInk: (Int, Int) -> Bool) -> [Int] {
         var along = [Int](repeating: 0, count: vertical ? height : width)
         for y in 0..<height {
             for x in 0..<width where band.contains(vertical ? x : y) && isInk(x, y) { along[vertical ? y : x] += 1 }
         }
-        return (band, along)
+        return along
+    }
+
+    /// Glyph boxes for a recognised line from its `ink` alone (`isInk` over a
+    /// `width`×`height` crop): tokens move onto glyph cells and each box is
+    /// centred on its own glyph. When art beside the line (a bubble tail or
+    /// outline) makes its ink band much wider than the `glyph` size expected
+    /// for it, the glyph-sized window holding the most ink is the text.
+    /// Returns the tokens and the line's extent across the crop.
+    static func place(_ tokens: [PDFOCRToken], ink: (band: Range<Int>, across: [Int]), width: Int, height: Int,
+                      vertical: Bool, glyph expected: Int?, isInk: (Int, Int) -> Bool) -> (tokens: [PDFOCRToken], across: Range<Int>) {
+        let length = vertical ? height : width, thickness = vertical ? width : height
+        var band = ink.band
+        if let expected, Double(band.count) > Double(expected) * 1.3 {
+            let size = min(band.count, expected)
+            var best = band.lowerBound, bestInk = -1
+            var sum = ink.across[band.lowerBound..<(band.lowerBound + size)].reduce(0, +)
+            for start in band.lowerBound...(band.upperBound - size) {
+                if start > band.lowerBound { sum += ink.across[start + size - 1] - ink.across[start - 1] }
+                if sum > bestInk { bestInk = sum; best = start }
+            }
+            // Trimmed to its own ink, so a window wider than the glyphs does
+            // not take in the edge of the art beside them.
+            let window = Array(ink.across[best..<(best + size)])
+            band = mainBand(window).map { (best + $0.lowerBound)..<(best + $0.upperBound) } ?? best..<(best + size)
+        }
+        // Strokes reaching far outside the band (a bubble outline or frame
+        // crossing or touching the text) are not glyph ink; they count only
+        // for a cell with nothing else.
+        let outside = strayInk(band: band, width: width, height: height, vertical: vertical, isInk: isInk)
+        let glyphInk = { (x: Int, y: Int) in isInk(x, y) && !outside[y * width + x] }
+        let along = alongInk(band: band, width: width, height: height, vertical: vertical, isInk: glyphInk)
+        let runs = segments(profile: along, minimumGap: 1)
+        let (pitch, cells) = glyphCells(runs: runs, glyphWidth: CGFloat(band.count), length: length, separateLongRuns: true)
+        let pad = max(1, band.count / 16)
+        let across = max(0, band.lowerBound - pad)..<min(thickness, band.upperBound + pad)
+        let snapped = snap(tokens, cells: cells, pitch: pitch, length: length)
+        let bounds = zip(cellInk(cells, band: band, vertical: vertical, isInk: glyphInk),
+                         cellInk(cells, band: band, vertical: vertical, isInk: isInk)).map { $0 ?? $1 }
+        // Boxes no bigger than the page's glyphs, so a band widened by art it
+        // could not shed still yields boxes the size of its neighbours'.
+        let glyph = expected.map { min(band.count, Int((Double($0) * 1.15).rounded())) } ?? band.count
+        return (centreOnInk(snapped, cells: cells, ink: bounds, glyph: glyph, length: length, across: across), across)
+    }
+
+    /// Ink pixels (row-major over the crop) of strokes that reach more than
+    /// a third of the band beyond either side of it.
+    static func strayInk(band: Range<Int>, width: Int, height: Int, vertical: Bool, isInk: (Int, Int) -> Bool) -> [Bool] {
+        let reach = max(2, band.count / 3)
+        var label = [Int](repeating: -1, count: width * height), stray: [Bool] = []
+        for start in 0..<(width * height) where label[start] < 0 && isInk(start % width, start / width) {
+            let component = stray.count
+            var escapes = false, stack = [start]
+            label[start] = component
+            while let index = stack.popLast() {
+                let x = index % width, y = index / width, offset = vertical ? x : y
+                if offset < band.lowerBound - reach || offset >= band.upperBound + reach { escapes = true }
+                for dy in -1...1 {
+                    for dx in -1...1 where dx != 0 || dy != 0 {
+                        let nx = x + dx, ny = y + dy
+                        guard nx >= 0, nx < width, ny >= 0, ny < height, label[ny * width + nx] < 0, isInk(nx, ny) else { continue }
+                        label[ny * width + nx] = component
+                        stack.append(ny * width + nx)
+                    }
+                }
+            }
+            stray.append(escapes)
+        }
+        return label.map { $0 >= 0 && stray[$0] }
     }
 
     /// The heaviest run of an across-the-line ink profile, joined with nearby
@@ -329,5 +453,75 @@ nonisolated enum PDFPageOCRLayout {
         }
         let offset = (0..<n).reduce(0) { $0 + distance($1, assignment[$1]) } / Double(n)
         return offset <= 0.5 ? assignment : nil
+    }
+
+    /// Ink bounds of each cell, `along` the line and `across` it inside
+    /// `band`, without the faintest 3% of its ink at either end (a stray
+    /// outline corner); nil for a cell without ink.
+    static func cellInk(_ cells: [Range<Int>], band: Range<Int>, vertical: Bool,
+                        isInk: (Int, Int) -> Bool) -> [(along: Range<Int>, across: Range<Int>)?] {
+        func trimmed(_ profile: [Int], from origin: Int) -> Range<Int>? {
+            let total = profile.reduce(0, +)
+            guard total > 0 else { return nil }
+            let cut = total * 3 / 100
+            var lower = 0, upper = profile.count, sum = 0
+            for (index, count) in profile.enumerated() { sum += count; if sum > cut { lower = index; break } }
+            sum = 0
+            for (index, count) in profile.enumerated().reversed() { sum += count; if sum > cut { upper = index + 1; break } }
+            return (origin + lower)..<(origin + max(lower + 1, upper))
+        }
+        return cells.map { cell in
+            var along = [Int](repeating: 0, count: cell.count), across = [Int](repeating: 0, count: band.count)
+            for position in cell {
+                for offset in band where vertical ? isInk(offset, position) : isInk(position, offset) {
+                    along[position - cell.lowerBound] += 1; across[offset - band.lowerBound] += 1
+                }
+            }
+            guard let alongInk = trimmed(along, from: cell.lowerBound), let acrossInk = trimmed(across, from: band.lowerBound) else { return nil }
+            return (alongInk, acrossInk)
+        }
+    }
+
+    /// Centre each snapped token's box on its own glyph's ink along the line
+    /// and on the line's centre across it, so ink beside the line (a
+    /// bubble tail, a neighbouring column) cannot pull boxes off their
+    /// characters. Across the line a box is a little wider than
+    /// `glyph`; along it, a box is `glyph` long, or up to 15% longer for a
+    /// longer glyph, never longer than its cell. It stays inside its cell,
+    /// and tokens sharing a cell split it.
+    /// `length` is the line's length and `across` the line's extent across
+    /// the crop, which token fractions are relative to.
+    static func centreOnInk(_ tokens: [PDFOCRToken], cells: [Range<Int>], ink: [(along: Range<Int>, across: Range<Int>)?],
+                            glyph: Int, length: Int, across: Range<Int>) -> [PDFOCRToken] {
+        guard length > 0, !across.isEmpty, cells.count == ink.count else { return tokens }
+        func cell(of token: PDFOCRToken) -> Int? {
+            guard let extent = token.extent else { return nil }
+            let middle = (extent.lowerBound + extent.upperBound) / 2 * Double(length)
+            return cells.firstIndex { Double($0.lowerBound) <= middle && middle < Double($0.upperBound) }
+        }
+        let owners = tokens.map(cell(of:))
+        let side = Double(glyph) * 1.125
+        // A line of text is straight: its centre is the median centre of its
+        // full-size glyphs, whatever stray ink a few cells hold. Small kana
+        // and punctuation sit off-centre.
+        let centres = ink.compactMap { bounds -> Double? in
+            guard let bounds, Double(bounds.across.count) >= Double(glyph) * 0.6 else { return nil }
+            return Double(bounds.across.lowerBound + bounds.across.upperBound) / 2
+        }.sorted()
+        var result = tokens
+        for (index, owner) in owners.enumerated() {
+            guard let owner, let bounds = ink[owner] else { continue }
+            let line = centres.count >= 3 ? centres[centres.count / 2] : Double(bounds.across.lowerBound + bounds.across.upperBound) / 2
+            let middle = line - Double(across.lowerBound)
+            result[index].across = (middle - side / 2) / Double(across.count)...(middle + side / 2) / Double(across.count)
+            guard owners.filter({ $0 == owner }).count == 1 else { continue }
+            let span = cells[owner]
+            let size = min(Double(span.count), max(Double(glyph), min(Double(bounds.along.count), Double(glyph) * 1.15)))
+            let centre = Double(bounds.along.lowerBound + bounds.along.upperBound) / 2
+            let lower = min(max(centre - size / 2, Double(span.lowerBound)), Double(span.upperBound) - size)
+            result[index].extent = lower / Double(length)...(lower + size) / Double(length)
+            result[index].center = (lower + size / 2) / Double(length)
+        }
+        return result
     }
 }
