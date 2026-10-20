@@ -73,7 +73,13 @@ fi
 
 # Verify the expanded final Info.plist before signing or creating a distributable
 # artifact. Configuration values stay private and are never printed.
-python3 script/configure_hoshi_google_signin.py --verify-bundle "$APP_BUNDLE"
+# Only script/package_mac_local.sh sets HOSHI_SKIP_GOOGLE_SIGNIN_VERIFY; releases
+# always verify.
+if [[ "${HOSHI_SKIP_GOOGLE_SIGNIN_VERIFY:-}" == "1" ]]; then
+  echo "Skipping Google sign-in verification (local build)."
+else
+  python3 script/configure_hoshi_google_signin.py --verify-bundle "$APP_BUNDLE"
+fi
 
 verify_full_bundle() {
   local frameworks="$APP_BUNDLE/Contents/Frameworks"
